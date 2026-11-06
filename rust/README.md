@@ -64,6 +64,8 @@ cargo build --release --target x86_64-pc-windows-msvc
 ```bash
 ./ymd --token "<Токен>" --quality 2 --url "https://music.yandex.ru/artist/208167"
 ./ymd --token "<Токен>" --quality 1 --lyrics-format lrc --url "https://music.yandex.ru/album/294912"
+./ymd --token "<Токен>" "https://music.yandex.ru/album/11644078/track/6705392"
+# или с флагом:
 ./ymd --token "<Токен>" --url "https://music.yandex.ru/album/11644078/track/6705392"
 ```
 

@@ -70,7 +70,7 @@ fn cover_resolution_arg(value: &str) -> Result<i64, String> {
 #[command(
     name = "ymd",
     about = "Загрузчик музыки с сервиса Яндекс.Музыка",
-    group(ArgGroup::new("id").required(true).multiple(false).args([
+    group(ArgGroup::new("id").multiple(false).args([
         "artist_id", "album_id", "track_id", "playlist_id", "url"
     ]))
 )]
@@ -241,6 +241,12 @@ struct Args {
     path_pattern: PathBuf,
 
     #[arg(
+        value_name = "URL",
+        help = "URL исполнителя/альбома/трека/плейлиста (можно передать без -u)"
+    )]
+    positional_url: Option<String>,
+
+    #[arg(
         long,
         help_heading = "Авторизация",
         value_name = "Токен",
@@ -368,6 +374,19 @@ fn run(mut args: Args) -> Result<()> {
             "Аргумент --add-lyrics устарел и будет удален в будущем. Используйте --lyrics-format"
         );
         args.lyrics_format = LyricsFormat::Text;
+    }
+
+    if args.url.is_none() {
+        args.url = args.positional_url.take();
+    }
+
+    if args.artist_id.is_none()
+        && args.album_id.is_none()
+        && args.track_id.is_none()
+        && args.playlist_id.is_none()
+        && args.url.is_none()
+    {
+        bail!("Не указан ID или URL. Используйте --help");
     }
 
     if let Some(url) = args.url.clone() {
