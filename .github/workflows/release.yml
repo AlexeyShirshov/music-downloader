@@ -27,7 +27,8 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ inputs.version || github.ref_name }}
         run: |
-          gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" \
+          gh release view "$TAG" -R "${{ github.repository }}" >/dev/null 2>&1 || gh release create "$TAG" \
+            -R "${{ github.repository }}" \
             --title "$TAG" \
             --notes "Rust port of yandex-music-downloader: self-contained binaries for Linux, Windows and macOS. No Python, pip or VC++ Redistributable required."
 
@@ -98,7 +99,7 @@ jobs:
           TAG: ${{ inputs.version || github.ref_name }}
         run: |
           cp "rust/target/${{ matrix.target }}/release/${{ matrix.binary }}" "${{ matrix.artifact }}"
-          gh release upload "$TAG" "${{ matrix.artifact }}" --clobber
+          gh release upload "$TAG" "${{ matrix.artifact }}" --clobber -R "${{ github.repository }}"
 
       - name: Upload binary to release (Windows)
         if: matrix.os == 'windows-latest'
@@ -107,4 +108,4 @@ jobs:
           TAG: ${{ inputs.version || github.ref_name }}
         run: |
           copy "rust\target\${{ matrix.target }}\release\${{ matrix.binary }}" "${{ matrix.artifact }}"
-          gh release upload "$TAG" "${{ matrix.artifact }}" --clobber
+          gh release upload "$TAG" "${{ matrix.artifact }}" --clobber -R "${{ github.repository }}"
