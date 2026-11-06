@@ -18,15 +18,29 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  prepare-release:
+    name: Prepare release
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Create release if missing
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ inputs.version || github.ref_name }}
+        run: |
+          gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" \
+            --title "$TAG" \
+            --notes "Rust port of yandex-music-downloader: self-contained binaries for Linux, Windows and macOS. No Python, pip or VC++ Redistributable required."
+
   build:
     name: ${{ matrix.artifact }}
+    needs: prepare-release
     runs-on: ${{ matrix.os }}
     continue-on-error: ${{ matrix.continue-on-error || false }}
     strategy:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-latest
+          - os: ubuntu-24.04
             target: x86_64-unknown-linux-musl
             artifact: ymd-linux-x86_64
             binary: ymd
@@ -34,8 +48,8 @@ jobs:
           - os: macos-latest
             target: aarch64-apple-darwin
             artifact: ymd-macos-arm64
-            continue-on-error: true
             binary: ymd
+            continue-on-error: true
           - os: macos-latest
             target: x86_64-apple-darwin
             artifact: ymd-macos-x86_64
@@ -73,38 +87,24 @@ jobs:
         run: cargo build --release --target ${{ matrix.target }}
 
       - name: Build (macOS)
-        if: matrix.os == 'macos-latest'
+        if: ${{ !matrix.musl && !matrix.crt_static }}
         working-directory: rust
         run: cargo build --release --target ${{ matrix.target }}
 
-      - name: Collect binary (Unix)
+      - name: Upload binary to release (Unix)
         if: matrix.os != 'windows-latest'
-        run: cp "rust/target/${{ matrix.target }}/release/${{ matrix.binary }}" "${{ matrix.artifact }}"
-
-      - name: Collect binary (Windows)
-        if: matrix.os == 'windows-latest'
-        run: copy "rust\target\${{ matrix.target }}\release\${{ matrix.binary }}" "${{ matrix.artifact }}"
-
-      - uses: actions/upload-artifact@v5
-        with:
-          name: ${{ matrix.artifact }}
-          path: ${{ matrix.artifact }}
-          if-no-files-found: error
-
-  release:
-    needs: build
-    if: always()
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/download-artifact@v5
-        with:
-          path: artifacts
-          merge-multiple: true
-
-      - name: Publish release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ inputs.version || github.ref_name }}
         run: |
-          gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" --generate-notes
-          gh release upload "$TAG" artifacts/* --clobber
+          cp "rust/target/${{ matrix.target }}/release/${{ matrix.binary }}" "${{ matrix.artifact }}"
+          gh release upload "$TAG" "${{ matrix.artifact }}" --clobber
+
+      - name: Upload binary to release (Windows)
+        if: matrix.os == 'windows-latest'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ inputs.version || github.ref_name }}
+        run: |
+          copy "rust\target\${{ matrix.target }}\release\${{ matrix.binary }}" "${{ matrix.artifact }}"
+          gh release upload "$TAG" "${{ matrix.artifact }}" --clobber
