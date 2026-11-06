@@ -244,7 +244,7 @@ struct Args {
         long,
         help_heading = "Авторизация",
         value_name = "Токен",
-        help = "Токен для авторизации. Если не указан, токен будет получен через OAuth Device Flow (требуется подтверждение в браузере)"
+        help = "Токен для авторизации. Если не указан, используется сохранённый токен или запускается OAuth Device Flow"
     )]
     token: Option<String>,
 }
@@ -305,6 +305,63 @@ fn obtain_token(client: &mut Client) -> Result<String> {
     bail!("Таймаут ожидания подтверждения входа")
 }
 
+fn load_saved_token() -> Option<String> {
+    let path = token_path()?;
+    let token = std::fs::read_to_string(path).ok()?;
+    let token = token.trim().to_string();
+    if token.is_empty() {
+        None
+    } else {
+        Some(token)
+    }
+}
+
+fn save_token(token: &str) {
+    if let Some(path) = token_path() {
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        if let Err(error) = std::fs::write(&path, token) {
+            eprintln!("Не удалось сохранить токен в {}: {error}", path.display());
+        } else {
+            println!("Токен сохранён в {}", path.display());
+        }
+    }
+}
+
+fn token_path() -> Option<PathBuf> {
+    if let Ok(path) = std::env::var("YMD_TOKEN_FILE") {
+        if !path.is_empty() {
+            return Some(PathBuf::from(path));
+        }
+    }
+
+    let base = if let Ok(value) = std::env::var("XDG_CONFIG_HOME") {
+        if !value.is_empty() {
+            Some(PathBuf::from(value))
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
+    let base = base.or_else(|| {
+        #[cfg(target_os = "windows")]
+        {
+            std::env::var("APPDATA").ok().map(PathBuf::from)
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            std::env::var("HOME")
+                .ok()
+                .map(|home| PathBuf::from(home).join(".config"))
+        }
+    });
+
+    base.map(|path| path.join("ymd").join("token"))
+}
+
 fn run(mut args: Args) -> Result<()> {
     if args.add_lyrics {
         println!(
@@ -325,10 +382,20 @@ fn run(mut args: Args) -> Result<()> {
         args.retry_delay,
     );
 
-    if args.token.is_none() {
+    let token = if let Some(token) = args.token.clone().filter(|token| !token.is_empty()) {
+        save_token(&token);
+        token
+    } else if let Some(token) = load_saved_token() {
+        println!("Используется сохранённый токен");
+        token
+    } else {
         let token = obtain_token(&mut client)?;
+        save_token(&token);
         println!("access_token: {token}");
-    }
+        token
+    };
+
+    client.token = token;
 
     api::account_status(&client)?;
 

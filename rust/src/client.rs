@@ -58,7 +58,7 @@ fn retryable(status: u16) -> bool {
 
 pub struct Client {
     agent: ureq::Agent,
-    token: String,
+    pub token: String,
     tries: u32,
     retry_delay: Duration,
     pub api_base: String,
