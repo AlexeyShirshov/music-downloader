@@ -12,7 +12,8 @@
 | Платформа | Файл |
 | --- | --- |
 | Linux x86_64 (статический) | `ymd-linux-x86_64` |
-| macOS (Intel и Apple Silicon через Rosetta 2) | `ymd-macos-x86_64` |
+| macOS Apple Silicon | `ymd-macos-arm64` |
+| macOS Intel | `ymd-macos-x86_64` |
 | Windows x86_64 | `ymd-windows-x86_64.exe` |
 
 ```bash
