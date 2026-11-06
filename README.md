@@ -2,6 +2,15 @@
 
 > **Rust-порт:** самодостаточные бинарники для Linux, Windows и macOS без
 > Python, pip и VC++ Redistributable — см. [rust/README.md](rust/README.md).
+>
+> Скачать готовые бинарники: [GitHub Releases](https://github.com/AlexeyShirshov/yandex-music-downloader2/releases/latest)
+>
+> | Платформа | Файл |
+> | --- | --- |
+> | Linux x86_64 (статический) | [ymd-linux-x86_64](https://github.com/AlexeyShirshov/yandex-music-downloader2/releases/latest/download/ymd-linux-x86_64) |
+> | macOS Apple Silicon | [ymd-macos-arm64](https://github.com/AlexeyShirshov/yandex-music-downloader2/releases/latest/download/ymd-macos-arm64) |
+> | macOS Intel | [ymd-macos-x86_64](https://github.com/AlexeyShirshov/yandex-music-downloader2/releases/latest/download/ymd-macos-x86_64) |
+> | Windows x86_64 | [ymd-windows-x86_64.exe](https://github.com/AlexeyShirshov/yandex-music-downloader2/releases/latest/download/ymd-windows-x86_64.exe) |
 
 > Внимание! В версии v3 был изменен способ авторизации и некоторые
 > аргументы. Смотрите [MIGRATION.md](MIGRATION.md) для получения информации
