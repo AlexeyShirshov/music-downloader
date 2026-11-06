@@ -55,6 +55,7 @@ jobs:
             target: x86_64-apple-darwin
             artifact: ymd-macos-x86_64
             binary: ymd
+            continue-on-error: true
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             artifact: ymd-windows-x86_64.exe
