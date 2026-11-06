@@ -1,0 +1,107 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Тег релиза, например v3.5.6"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: ${{ matrix.artifact }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+            artifact: ymd-linux-x86_64
+            binary: ymd
+            musl: true
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            artifact: ymd-macos-arm64
+            binary: ymd
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            artifact: ymd-macos-x86_64
+            binary: ymd
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            artifact: ymd-windows-x86_64.exe
+            binary: ymd.exe
+            crt_static: true
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install musl tools
+        if: matrix.musl
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+
+      - name: Build (Linux musl)
+        if: matrix.musl
+        working-directory: rust
+        env:
+          CC_x86_64_unknown_linux_musl: musl-gcc
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Build (Windows, static CRT)
+        if: matrix.crt_static
+        working-directory: rust
+        env:
+          RUSTFLAGS: -C target-feature=+crt-static
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Build (macOS)
+        if: matrix.os == 'macos-latest'
+        working-directory: rust
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Collect binary (Unix)
+        if: matrix.os != 'windows-latest'
+        run: cp "rust/target/${{ matrix.target }}/release/${{ matrix.binary }}" "${{ matrix.artifact }}"
+
+      - name: Collect binary (Windows)
+        if: matrix.os == 'windows-latest'
+        run: copy "rust\target\${{ matrix.target }}\release\${{ matrix.binary }}" "${{ matrix.artifact }}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.artifact }}
+          if-no-files-found: error
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ inputs.version || github.ref_name }}
+        run: |
+          gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" --generate-notes
+          gh release upload "$TAG" artifacts/* --clobber

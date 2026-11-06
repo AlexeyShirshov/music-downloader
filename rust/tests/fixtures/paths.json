@@ -1,0 +1,858 @@
+[
+  {
+    "name": "default",
+    "pattern": "#album-artist/#album/#number - #title",
+    "unsafe": false,
+    "track": {
+      "id": 1,
+      "title": "Title",
+      "version": null,
+      "available": true,
+      "artists": [
+        {
+          "id": 20,
+          "name": "Track Artist"
+        }
+      ],
+      "albums": [
+        {
+          "id": 1,
+          "title": "Album",
+          "version": null,
+          "year": 2000,
+          "releaseDate": null,
+          "genre": "rock",
+          "trackCount": 10,
+          "artists": [
+            {
+              "id": 10,
+              "name": "Album Artist"
+            }
+          ],
+          "volumes": null,
+          "trackPosition": {
+            "volume": 1,
+            "index": 7
+          }
+        }
+      ],
+      "coverUri": null,
+      "lyricsInfo": {
+        "has_available_sync_lyrics": false,
+        "has_available_text_lyrics": false
+      }
+    },
+    "expected": "Album Artist/Album/7 - Title"
+  },
+  {
+    "name": "default-version",
+    "pattern": "#album-artist/#album/#number - #title",
+    "unsafe": false,
+    "track": {
+      "id": 1,
+      "title": "Song",
+      "version": "Remix",
+      "available": true,
+      "artists": [
+        {
+          "id": 20,
+          "name": "Track Artist"
+        }
+      ],
+      "albums": [
+        {
+          "id": 1,
+          "title": "Album",
+          "version": null,
+          "year": 2000,
+          "releaseDate": null,
+          "genre": "rock",
+          "trackCount": 10,
+          "artists": [
+            {
+              "id": 10,
+              "name": "Album Artist"
+            }
+          ],
+          "volumes": null,
+          "trackPosition": {
+            "volume": 1,
+            "index": 7
+          }
+        }
+      ],
+      "coverUri": null,
+      "lyricsInfo": {
+        "has_available_sync_lyrics": false,
+        "has_available_text_lyrics": false
+      }
+    },
+    "expected": "Album Artist/Album/7 - Song (Remix)"
+  },
+  {
+    "name": "number-100",
+    "pattern": "#album-artist/#album/#number - #title",
+    "unsafe": false,
+    "track": {
+      "id": 1,
+      "title": "Title",
+      "version": null,
+      "available": true,
+      "artists": [
+        {
+          "id": 20,
+          "name": "Track Artist"
+        }
+      ],
+      "albums": [
+        {
+          "id": 1,
+          "title": "Album",
+          "version": null,
+          "year": 2000,
+          "releaseDate": null,
+          "genre": "rock",
+          "trackCount": 120,
+          "artists": [
+            {
+              "id": 10,
+              "name": "Album Artist"
+            }
+          ],
+          "volumes": null,
+          "trackPosition": {
+            "volume": 1,
+            "index": 100
+          }
+        }
+      ],
+      "coverUri": null,
+      "lyricsInfo": {
+        "has_available_sync_lyrics": false,
+        "has_available_text_lyrics": false
+      }
+    },
+    "expected": "Album Artist/Album/100 - Title"
+  },
+  {
+    "name": "multi-disc",
+    "pattern": "#album-artist/#album/#number - #title",
+    "unsafe": false,
+    "track": {
+      "id": 1,
+      "title": "Title",
+      "version": null,
+      "available": true,
+      "artists": [
+        {
+          "id": 20,
+          "name": "Track Artist"
+        }
+      ],
+      "albums": [
+        {
+          "id": 1,
+          "title": "Album",
+          "version": null,
+          "year": 2000,
+          "releaseDate": null,
+          "genre": "rock",
+          "trackCount": 30,
+          "artists": [
+            {
+              "id": 10,
+              "name": "Album Artist"
+            }
+          ],
+          "volumes": [
+            [
+              {}
+            ],
+            [
+              {}
+            ],
+            [
+              {}
+            ]
+          ],
+          "trackPosition": {
+            "volume": 2,
+            "index": 5
+          }
+        }
+      ],
+      "coverUri": null,
+      "lyricsInfo": {
+        "has_available_sync_lyrics": false,
+        "has_available_text_lyrics": false
+      }
+    },
+    "expected": "Album Artist/Album/2_5 - Title"
+  },
+  {
+    "name": "multi-disc-padded",
+    "pattern": "#album-artist/#album/#disc-number-padded - #number-padded - #title",
+    "unsafe": false,
+    "track": {
+      "id": 1,
+      "title": "Title",
+      "version": null,
+      "available": true,
+      "artists": [
+        {
+          "id": 20,
+          "name": "Track Artist"
+        }
+      ],
+      "albums": [
+        {
+          "id": 1,
+          "title": "Album",
+          "version": null,
+          "year": 2000,
+          "releaseDate": null,
+          "genre": "rock",
+          "trackCount": 100,
+          "artists": [
+            {
+              "id": 10,
+              "name": "Album Artist"
+            }
+          ],
+          "volumes": [
+            [
+              {}
+            ],
+            [
+              {}
+            ],
+            [
+              {}
+            ]
+          ],
+          "trackPosition": {
+            "volume": 2,
+            "index": 5
+          }
+        }
+      ],
+      "coverUri": null,
+      "lyricsInfo": {
+        "has_available_sync_lyrics": false,
+        "has_available_text_lyrics": false
+      }
+    },
+    "expected": "Album Artist/Album/02 - 5 - Title"
+  },
+  {
+    "name": "disc-number",
+    "pattern": "#disc-number-#disc-number-padded-#number-#number-padded-#title",
+    "unsafe": false,
+    "track": {
+      "id": 1,
+      "title": "Title",
+      "version": null,
+      "available": true,
+      "artists": [
+        {
+          "id": 20,
+          "name": "Track Artist"
+        }
+      ],
+      "albums": [
+        {
+          "id": 1,
+          "title": "Album",
+          "version": null,
+          "year": 2000,
+          "releaseDate": null,
+          "genre": "rock",
+          "trackCount": 100,
+          "artists": [
+            {
+              "id": 10,
+              "name": "Album Artist"
+            }
+          ],
+          "volumes": [
+            [
+              {}
+            ],
+            [
+              {}
+            ],
+            [
+              {}
+            ]
+          ],
+          "trackPosition": {
+            "volume": 12,
+            "index": 7
+          }
+        }
+      ],
+      "coverUri": null,
+      "lyricsInfo": {
+        "has_available_sync_lyrics": false,
+        "has_available_text_lyrics": false
+      }
+    },
+    "expected": "12-12-7-7-Title"
+  },
+  {
+    "name": "missing-fields",
+    "pattern": "#album-artist/#album/#number - #title",
+    "unsafe": false,
+    "track": {
+      "id": 1,
+      "title": "T",
+      "version": null,
+      "available": true,
+      "artists": [],
+      "albums": [],
+      "coverUri": null,
+      "lyricsInfo": null
+    },
+    "expected": "None/None/None - T"
+  },
+  {
+    "name": "special-chars",
+    "pattern": "#album-artist/#album/#number - #title",
+    "unsafe": false,
+    "track": {
+      "id": 1,
+      "title": "AC/DC: Back? in \"Black\" *<>|",
+      "version": null,
+      "available": true,
+      "artists": [
+        {
+          "id": 20,
+          "name": "A/B"
+        }
+      ],
+      "albums": [
+        {
+          "id": 1,
+          "title": "A/B\\C: D?",
+          "version": null,
+          "year": 2000,
+          "releaseDate": null,
+          "genre": "rock",
+          "trackCount": 10,
+          "artists": [
+            {
+              "id": 10,
+              "name": "Album Artist"
+            }
+          ],
+          "volumes": null,
+          "trackPosition": {
+            "volume": 1,
+            "index": 1
+          }
+        }
+      ],
+      "coverUri": null,
+      "lyricsInfo": {
+        "has_available_sync_lyrics": false,
+        "has_available_text_lyrics": false
+      }
+    },
+    "expected": "Album Artist/A_B_C_ D_/1 - AC_DC_ Back_ in _Black_ ____"
+  },
+  {
+    "name": "unsafe-special",
+    "pattern": "#album-artist/#album/#number - #title",
+    "unsafe": true,
+    "track": {
+      "id": 1,
+      "title": "AC/DC: Back? in \"Black\"",
+      "version": null,
+      "available": true,
+      "artists": [
+        {
+          "id": 20,
+          "name": "A/B"
+        }
+      ],
+      "albums": [
+        {
+          "id": 1,
+          "title": "A/B\\C: D?",
+          "version": null,
+          "year": 2000,
+          "releaseDate": null,
+          "genre": "rock",
+          "trackCount": 10,
+          "artists": [
+            {
+              "id": 10,
+              "name": "Album Artist"
+            }
+          ],
+          "volumes": null,
+          "trackPosition": {
+            "volume": 1,
+            "index": 1
+          }
+        }
+      ],
+      "coverUri": null,
+      "lyricsInfo": {
+        "has_available_sync_lyrics": false,
+        "has_available_text_lyrics": false
+      }
+    },
+    "expected": "Album Artist/A_B_C: D?/1 - AC_DC: Back? in \"Black\""
+  },
+  {
+    "name": "leading-space",
+    "pattern": "#album-artist/#album/#number - #title",
+    "unsafe": false,
+    "track": {
+      "id": 1,
+      "title": "  hello  ",
+      "version": null,
+      "available": true,
+      "artists": [
+        {
+          "id": 20,
+          "name": "  artist  "
+        }
+      ],
+      "albums": [
+        {
+          "id": 1,
+          "title": "  spaced  ",
+          "version": null,
+          "year": 2000,
+          "releaseDate": null,
+          "genre": "rock",
+          "trackCount": 10,
+          "artists": [
+            {
+              "id": 10,
+              "name": "Album Artist"
+            }
+          ],
+          "volumes": null,
+          "trackPosition": {
+            "volume": 1,
+            "index": 1
+          }
+        }
+      ],
+      "coverUri": null,
+      "lyricsInfo": {
+        "has_available_sync_lyrics": false,
+        "has_available_text_lyrics": false
+      }
+    },
+    "expected": "Album Artist/_spaced_/1 - _hello_"
+  },
+  {
+    "name": "dots-spaces-end",
+    "pattern": "#album-artist/#album/#number - #title",
+    "unsafe": false,
+    "track": {
+      "id": 1,
+      "title": "hello...  ",
+      "version": null,
+      "available": true,
+      "artists": [
+        {
+          "id": 20,
+          "name": "artist."
+        }
+      ],
+      "albums": [
+        {
+          "id": 1,
+          "title": "..album..",
+          "version": null,
+          "year": 2000,
+          "releaseDate": null,
+          "genre": "rock",
+          "trackCount": 10,
+          "artists": [
+            {
+              "id": 10,
+              "name": "Album Artist"
+            }
+          ],
+          "volumes": null,
+          "trackPosition": {
+            "volume": 1,
+            "index": 1
+          }
+        }
+      ],
+      "coverUri": null,
+      "lyricsInfo": {
+        "has_available_sync_lyrics": false,
+        "has_available_text_lyrics": false
+      }
+    },
+    "expected": "Album Artist/__album__/1 - hello____"
+  },
+  {
+    "name": "empty-title",
+    "pattern": "#album-artist/#album/#number - #title",
+    "unsafe": false,
+    "track": {
+      "id": 1,
+      "title": "",
+      "version": null,
+      "available": true,
+      "artists": [
+        {
+          "id": 20,
+          "name": ""
+        }
+      ],
+      "albums": [
+        {
+          "id": 1,
+          "title": "",
+          "version": null,
+          "year": 2000,
+          "releaseDate": null,
+          "genre": "rock",
+          "trackCount": 10,
+          "artists": [
+            {
+              "id": 10,
+              "name": "Album Artist"
+            }
+          ],
+          "volumes": null,
+          "trackPosition": {
+            "volume": 1,
+            "index": 1
+          }
+        }
+      ],
+      "coverUri": null,
+      "lyricsInfo": {
+        "has_available_sync_lyrics": false,
+        "has_available_text_lyrics": false
+      }
+    },
+    "expected": "Album Artist/1 - "
+  },
+  {
+    "name": "unicode",
+    "pattern": "#album-artist/#album/#title",
+    "unsafe": false,
+    "track": {
+      "id": 1,
+      "title": "Песня — тест ☃",
+      "version": null,
+      "available": true,
+      "artists": [
+        {
+          "id": 20,
+          "name": "Кино"
+        }
+      ],
+      "albums": [
+        {
+          "id": 1,
+          "title": "Альбом №1",
+          "version": null,
+          "year": 2000,
+          "releaseDate": null,
+          "genre": "rock",
+          "trackCount": 10,
+          "artists": [
+            {
+              "id": 10,
+              "name": "Album Artist"
+            }
+          ],
+          "volumes": null,
+          "trackPosition": {
+            "volume": 1,
+            "index": 1
+          }
+        }
+      ],
+      "coverUri": null,
+      "lyricsInfo": {
+        "has_available_sync_lyrics": false,
+        "has_available_text_lyrics": false
+      }
+    },
+    "expected": "Album Artist/Альбом _1/Песня _ тест _"
+  },
+  {
+    "name": "id-placeholders",
+    "pattern": "#album-id-#track-id-#artist-id-#year",
+    "unsafe": false,
+    "track": {
+      "id": 1,
+      "title": "Title",
+      "version": null,
+      "available": true,
+      "artists": [
+        {
+          "id": 777,
+          "name": "X"
+        }
+      ],
+      "albums": [
+        {
+          "id": 555,
+          "title": "Album",
+          "version": null,
+          "year": 1999,
+          "releaseDate": null,
+          "genre": "rock",
+          "trackCount": 10,
+          "artists": [
+            {
+              "id": 10,
+              "name": "Album Artist"
+            }
+          ],
+          "volumes": null,
+          "trackPosition": {
+            "volume": 1,
+            "index": 1
+          }
+        }
+      ],
+      "coverUri": null,
+      "lyricsInfo": {
+        "has_available_sync_lyrics": false,
+        "has_available_text_lyrics": false
+      }
+    },
+    "expected": "555-1-777-1999"
+  },
+  {
+    "name": "artist-no-id",
+    "pattern": "#artist-id-#title",
+    "unsafe": false,
+    "track": {
+      "id": 1,
+      "title": "Title",
+      "version": null,
+      "available": true,
+      "artists": [
+        {
+          "id": null,
+          "name": "X"
+        }
+      ],
+      "albums": [
+        {
+          "id": 1,
+          "title": "Album",
+          "version": null,
+          "year": 2000,
+          "releaseDate": null,
+          "genre": "rock",
+          "trackCount": 10,
+          "artists": [
+            {
+              "id": 10,
+              "name": "Album Artist"
+            }
+          ],
+          "volumes": null,
+          "trackPosition": {
+            "volume": 1,
+            "index": 7
+          }
+        }
+      ],
+      "coverUri": null,
+      "lyricsInfo": {
+        "has_available_sync_lyrics": false,
+        "has_available_text_lyrics": false
+      }
+    },
+    "expected": "None-Title"
+  },
+  {
+    "name": "zero-year",
+    "pattern": "#year-#album",
+    "unsafe": false,
+    "track": {
+      "id": 1,
+      "title": "Title",
+      "version": null,
+      "available": true,
+      "artists": [
+        {
+          "id": 20,
+          "name": "Track Artist"
+        }
+      ],
+      "albums": [
+        {
+          "id": 1,
+          "title": "Album",
+          "version": null,
+          "year": 0,
+          "releaseDate": null,
+          "genre": "rock",
+          "trackCount": 10,
+          "artists": [
+            {
+              "id": 10,
+              "name": "Album Artist"
+            }
+          ],
+          "volumes": null,
+          "trackPosition": {
+            "volume": 1,
+            "index": 1
+          }
+        }
+      ],
+      "coverUri": null,
+      "lyricsInfo": {
+        "has_available_sync_lyrics": false,
+        "has_available_text_lyrics": false
+      }
+    },
+    "expected": "0-Album"
+  },
+  {
+    "name": "long-unicode",
+    "pattern": "#album-artist/#album/#number - #title",
+    "unsafe": false,
+    "track": {
+      "id": 1,
+      "title": "ЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖ",
+      "version": null,
+      "available": true,
+      "artists": [
+        {
+          "id": 20,
+          "name": "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB"
+        }
+      ],
+      "albums": [
+        {
+          "id": 1,
+          "title": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+          "version": null,
+          "year": 2000,
+          "releaseDate": null,
+          "genre": "rock",
+          "trackCount": 10,
+          "artists": [
+            {
+              "id": 10,
+              "name": "Album Artist"
+            }
+          ],
+          "volumes": null,
+          "trackPosition": {
+            "volume": 1,
+            "index": 1
+          }
+        }
+      ],
+      "coverUri": null,
+      "lyricsInfo": {
+        "has_available_sync_lyrics": false,
+        "has_available_text_lyrics": false
+      }
+    },
+    "expected": "Album Artist/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA/1 - ЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖЖ"
+  },
+  {
+    "name": "nested-pattern",
+    "pattern": "music/#album-artist/#album/#number - #title",
+    "unsafe": false,
+    "track": {
+      "id": 1,
+      "title": "Title",
+      "version": null,
+      "available": true,
+      "artists": [
+        {
+          "id": 20,
+          "name": "Track Artist"
+        }
+      ],
+      "albums": [
+        {
+          "id": 1,
+          "title": "Album",
+          "version": null,
+          "year": 2000,
+          "releaseDate": null,
+          "genre": "rock",
+          "trackCount": 10,
+          "artists": [
+            {
+              "id": 10,
+              "name": "Album Artist"
+            }
+          ],
+          "volumes": null,
+          "trackPosition": {
+            "volume": 1,
+            "index": 7
+          }
+        }
+      ],
+      "coverUri": null,
+      "lyricsInfo": {
+        "has_available_sync_lyrics": false,
+        "has_available_text_lyrics": false
+      }
+    },
+    "expected": "music/Album Artist/Album/7 - Title"
+  },
+  {
+    "name": "dot-pattern",
+    "pattern": "#album-artist/#title.mp3",
+    "unsafe": false,
+    "track": {
+      "id": 1,
+      "title": "Title",
+      "version": null,
+      "available": true,
+      "artists": [
+        {
+          "id": 20,
+          "name": "Track Artist"
+        }
+      ],
+      "albums": [
+        {
+          "id": 1,
+          "title": "Album",
+          "version": null,
+          "year": 2000,
+          "releaseDate": null,
+          "genre": "rock",
+          "trackCount": 10,
+          "artists": [
+            {
+              "id": 10,
+              "name": "Album Artist"
+            }
+          ],
+          "volumes": null,
+          "trackPosition": {
+            "volume": 1,
+            "index": 7
+          }
+        }
+      ],
+      "coverUri": null,
+      "lyricsInfo": {
+        "has_available_sync_lyrics": false,
+        "has_available_text_lyrics": false
+      }
+    },
+    "expected": "Album Artist/Title.mp3"
+  }
+]

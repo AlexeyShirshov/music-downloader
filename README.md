@@ -1,5 +1,8 @@
 # yandex-music-downloader
 
+> **Rust-порт:** самодостаточные бинарники для Linux, Windows и macOS без
+> Python, pip и VC++ Redistributable — см. [rust/README.md](rust/README.md).
+
 > Внимание! В версии v3 был изменен способ авторизации и некоторые
 > аргументы. Смотрите [MIGRATION.md](MIGRATION.md) для получения информации
 > об изменениях
