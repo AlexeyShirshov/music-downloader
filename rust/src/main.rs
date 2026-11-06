@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::OnceLock;
 use std::time::Duration;
+use std::time::Instant;
 
 use anyhow::{anyhow, bail, Context, Result};
 use clap::{ArgGroup, Parser, ValueEnum};
@@ -242,11 +243,10 @@ struct Args {
     #[arg(
         long,
         help_heading = "Авторизация",
-        required = true,
         value_name = "Токен",
-        help = "Токен для авторизации. См. README для способов получения"
+        help = "Токен для авторизации. Если не указан, токен будет получен через OAuth Device Flow (требуется подтверждение в браузере)"
     )]
-    token: String,
+    token: Option<String>,
 }
 
 struct DownloadableTrack {
@@ -281,6 +281,30 @@ fn main() -> ExitCode {
     }
 }
 
+fn obtain_token(client: &mut Client) -> Result<String> {
+    let code = client
+        .request_device_code()
+        .map_err(|error| anyhow!("{error}"))?;
+    println!(
+        "Открой {} и введи код: {}",
+        code.verification_url, code.user_code
+    );
+
+    let deadline = Instant::now() + Duration::from_secs(code.expires_in.max(60));
+    let interval = Duration::from_secs(code.interval.max(1));
+
+    while Instant::now() < deadline {
+        match client.poll_device_token(&code.device_code) {
+            Ok(Some(token)) => return Ok(token),
+            Ok(None) => {}
+            Err(error) => return Err(anyhow!("{error}")),
+        }
+        std::thread::sleep(interval);
+    }
+
+    bail!("Таймаут ожидания подтверждения входа")
+}
+
 fn run(mut args: Args) -> Result<()> {
     if args.add_lyrics {
         println!(
@@ -293,12 +317,19 @@ fn run(mut args: Args) -> Result<()> {
         resolve_url(&mut args, &url)?;
     }
 
-    let client = Client::new(
-        args.token.clone(),
+    let token = args.token.clone().unwrap_or_default();
+    let mut client = Client::new(
+        token,
         args.timeout,
         u32::try_from(args.tries).unwrap_or(u32::MAX),
         args.retry_delay,
     );
+
+    if args.token.is_none() {
+        let token = obtain_token(&mut client)?;
+        println!("access_token: {token}");
+    }
+
     api::account_status(&client)?;
 
     let mut downloader = Downloader {

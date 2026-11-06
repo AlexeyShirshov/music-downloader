@@ -11,8 +11,26 @@ pub const USER_AGENT: &str = "Yandex-Music-API";
 pub const DEFAULT_API_BASE: &str = "https://api.music.yandex.net";
 pub const DEFAULT_COVER_BASE: &str = "https://";
 
+pub const YANDEX_OAUTH_BASE: &str = "https://oauth.yandex.ru";
+pub const DEFAULT_CLIENT_ID: &str = "23cabbbdc6cd418abb4b39c32c41195d";
+pub const DEFAULT_CLIENT_SECRET: &str = "53bc75238f0c4d08a118e51fe9203300";
+
 /// Максимальный размер тела ответа (треки во FLAC бывают большими).
 const BODY_LIMIT: u64 = 4 * 1024 * 1024 * 1024;
+
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct DeviceCode {
+    pub device_code: String,
+    pub user_code: String,
+    pub verification_url: String,
+    pub expires_in: u64,
+    pub interval: u64,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct OAuthToken {
+    pub access_token: String,
+}
 
 #[derive(Debug)]
 pub enum ApiError {
@@ -190,6 +208,95 @@ impl Client {
         };
         serde_json::from_value(result)
             .map_err(|e| ApiError::Fatal(format!("Не удалось разобрать ответ сервера: {e}")))
+    }
+
+    /// Запрос кода устройства для OAuth Device Flow.
+    pub fn request_device_code(&self) -> ApiResult<DeviceCode> {
+        let url = format!("{}/device/code", YANDEX_OAUTH_BASE);
+        let device_id: String = {
+            use rand::Rng;
+            rand::thread_rng()
+                .sample_iter(&rand::distributions::Alphanumeric)
+                .take(10)
+                .map(char::from)
+                .collect()
+        };
+
+        let mut response = self
+            .agent
+            .post(&url)
+            .send_form([
+                ("client_id", DEFAULT_CLIENT_ID),
+                ("device_id", device_id.as_str()),
+                ("device_name", "YandexMusicAPI"),
+            ])
+            .map_err(|e| ApiError::Network(format!("Ошибка запроса кода устройства: {e}")))?;
+
+        let status = response.status().as_u16();
+        let body = response
+            .body_mut()
+            .with_config()
+            .limit(BODY_LIMIT)
+            .read_to_vec()
+            .map_err(|e| ApiError::Network(format!("Не удалось прочитать ответ: {e}")))?;
+
+        if !(200..300).contains(&status) {
+            let message = error_message(&body);
+            return Err(ApiError::Fatal(if message.is_empty() {
+                format!("HTTP {status}")
+            } else {
+                format!("HTTP {status}: {message}")
+            }));
+        }
+
+        serde_json::from_slice(&body)
+            .map_err(|e| ApiError::Fatal(format!("Некорректный ответ сервера: {e}")))
+    }
+
+    /// Однократный опрос статуса подтверждения кода устройства.
+    pub fn poll_device_token(&self, device_code: &str) -> ApiResult<Option<String>> {
+        let url = format!("{}/token", YANDEX_OAUTH_BASE);
+        let mut response = self
+            .agent
+            .post(&url)
+            .send_form([
+                ("grant_type", "device_code"),
+                ("code", device_code),
+                ("client_id", DEFAULT_CLIENT_ID),
+                ("client_secret", DEFAULT_CLIENT_SECRET),
+            ])
+            .map_err(|e| ApiError::Network(format!("Ошибка запроса токена: {e}")))?;
+
+        let status = response.status().as_u16();
+        let body = response
+            .body_mut()
+            .with_config()
+            .limit(BODY_LIMIT)
+            .read_to_vec()
+            .map_err(|e| ApiError::Network(format!("Не удалось прочитать ответ: {e}")))?;
+
+        if (200..300).contains(&status) {
+            let token: OAuthToken = serde_json::from_slice(&body)
+                .map_err(|e| ApiError::Fatal(format!("Некорректный ответ сервера: {e}")))?;
+            return Ok(Some(token.access_token));
+        }
+
+        let value: serde_json::Value = serde_json::from_slice(&body).unwrap_or_default();
+        let error = value
+            .get("error")
+            .and_then(|value| value.as_str())
+            .unwrap_or_default();
+
+        if error == "authorization_pending" {
+            return Ok(None);
+        }
+
+        let message = value
+            .get("error_description")
+            .and_then(|value| value.as_str())
+            .unwrap_or(error);
+
+        Err(ApiError::Fatal(format!("OAuth error: {message}")))
     }
 }
 
