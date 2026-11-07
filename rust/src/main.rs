@@ -79,9 +79,9 @@ struct Args {
         long,
         help_heading = "Общие параметры",
         value_name = "Качество",
-        default_value_t = 0,
+        default_value_t = 2,
         value_parser = clap::value_parser!(u8).range(0..=2),
-        help = "Качество трека:\n0 - Низкое (AAC 64kbps)\n1 - Оптимальное (AAC 192kbps)\n2 - Лучшее (FLAC)\n(по умолчанию: 0)"
+        help = "Качество трека:\n0 - Низкое (AAC 64kbps)\n1 - Оптимальное (AAC 192kbps)\n2 - Лучшее (FLAC)\n(по умолчанию: 2)"
     )]
     quality: u8,
 
