@@ -129,6 +129,45 @@ pub struct WebToken {
     pub expires: i64,
 }
 
+/// Описывает прокси, который использует программа (из переменных окружения).
+pub fn proxy_summary() -> String {
+    for name in [
+        "HTTPS_PROXY",
+        "https_proxy",
+        "HTTP_PROXY",
+        "http_proxy",
+        "ALL_PROXY",
+        "all_proxy",
+    ] {
+        if let Ok(value) = std::env::var(name) {
+            let value = value.trim();
+            if !value.is_empty() {
+                return format!("{value} (из {name})");
+            }
+        }
+    }
+    "не задан".to_string()
+}
+
+/// Узнаёт внешний IP программы теми же настройками сети.
+pub fn external_ip(timeout_secs: u64) -> Option<String> {
+    let agent = http_agent(timeout_secs.clamp(1, 5));
+    let response = agent
+        .get("https://api.ipify.org")
+        .header("User-Agent", VK_WEB_USER_AGENT)
+        .call()
+        .ok()?;
+    let body = response
+        .into_body()
+        .with_config()
+        .limit(64)
+        .read_to_vec()
+        .ok()?;
+    let text = String::from_utf8(body).ok()?;
+    let text = text.trim().to_string();
+    (!text.is_empty()).then_some(text)
+}
+
 /// Обменивает куки браузера (`remixsid`) на токен веб-клиента.
 pub fn web_token(cookies: &str, timeout_secs: u64) -> ApiResult<WebToken> {
     let override_base = std::env::var("MUSIC_DOWNLOADER_VK_LOGIN_BASE_URL")

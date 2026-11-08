@@ -759,7 +759,10 @@ fn vk_login_with_cookies(args: &Args, input: &str, save: bool) -> Result<String>
     if save {
         save_vk_cookies(&cookies);
     }
-    let web_token = vk::web_token(&cookies, args.timeout).map_err(|error| anyhow!("{error}"))?;
+    let web_token = vk::web_token(&cookies, args.timeout).map_err(|error| {
+        print_vk_diagnostics(args);
+        anyhow!("{error}")
+    })?;
 
     verify_vk_token(args, &web_token.access_token)
 }
@@ -771,11 +774,22 @@ fn verify_vk_token(args: &Args, token: &str) -> Result<String> {
         u32::try_from(args.tries).unwrap_or(u32::MAX),
         args.retry_delay,
     );
-    let user = client
-        .current_user()
-        .map_err(|error| anyhow!("Токен не подошёл: {error}"))?;
+    let user = client.current_user().map_err(|error| {
+        print_vk_diagnostics(args);
+        anyhow!("Токен не подошёл: {error}")
+    })?;
     println!("Токен действителен, аккаунт: {}", user.display_name());
     Ok(token.to_string())
+}
+
+/// Показывает, через какой прокси и с какого IP программа ходит в VK.
+fn print_vk_diagnostics(args: &Args) {
+    println!("Прокси программы: {}", vk::proxy_summary());
+    match vk::external_ip(args.timeout) {
+        Some(ip) => println!("Внешний IP программы: {ip}"),
+        None => println!("Внешний IP программы: не удалось определить"),
+    }
+    println!("Сравните с IP браузера: откройте https://api.ipify.org в браузере, где вход в VK.");
 }
 
 /// Читает одну строку из stdin; пустое приглашение отключает подсказку.
