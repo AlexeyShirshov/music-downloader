@@ -1,7 +1,7 @@
 use std::io::{BufRead, BufReader, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::path::Path;
-use std::process::Command;
+use std::process::{Command, Stdio};
 use std::sync::Arc;
 
 use lofty::file::TaggedFileExt;
@@ -178,6 +178,20 @@ fn handle(mut stream: TcpStream, address: SocketAddr, cover: &[u8], audio: &[u8]
                     "title": "VK Song",
                     "duration": 215,
                     "url": format!("http://{address}/vkfile")
+                }]
+            })
+            .to_string()
+            .into_bytes(),
+        ),
+        "/method/users.get" => (
+            200,
+            "application/json",
+            json!({
+                "response": [{
+                    "id": 42,
+                    "first_name": "Тестовый",
+                    "last_name": "Аккаунт",
+                    "screen_name": "test"
                 }]
             })
             .to_string()
@@ -505,4 +519,53 @@ fn vk_track_download_end_to_end() {
         tag.get_string(lofty::tag::ItemKey::TrackArtist),
         Some("VK Artist")
     );
+}
+
+#[test]
+fn vk_login_accepts_pasted_url_and_saves_token() {
+    let (cover, audio) = fixtures();
+    let server = MockServer::start(cover, audio);
+    let dir = tempfile::tempdir().unwrap();
+    let token_file = dir.path().join("vk_token");
+
+    let mut child = Command::new(env!("CARGO_BIN_EXE_music-downloader"))
+        .env(
+            "MUSIC_DOWNLOADER_VK_API_BASE_URL",
+            format!("{}/method", server.api_base()),
+        )
+        .env("MUSIC_DOWNLOADER_VK_TOKEN_FILE", &token_file)
+        .arg("--vk-login")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn music-downloader");
+
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(b"https://oauth.vk.com/blank.html#access_token=vk1.a.TEST_TOKEN&expires_in=0\n")
+        .unwrap();
+
+    let output = child.wait_with_output().unwrap();
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("Тестовый Аккаунт"), "{stdout}");
+    assert_eq!(
+        std::fs::read_to_string(&token_file).unwrap(),
+        "vk1.a.TEST_TOKEN"
+    );
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        let mode = std::fs::metadata(&token_file).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o600);
+    }
 }

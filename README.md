@@ -96,7 +96,19 @@ cargo build --release --target x86_64-pc-windows-msvc
 ### VK
 
 VK не отдаёт музыку без авторизации, а обычный веб-токен не имеет доступа к
-методам `audio.*`. Нужен токен приложения **Kate Mobile**:
+методам `audio.*`. Нужен токен приложения **Kate Mobile**.
+
+Самый простой способ — `--vk-login`: программа откроет браузер, попросит
+подтвердить доступ и вставить скопированный адрес страницы (или сам токен),
+проверит токен через `users.get`, покажет аккаунт и сохранит его:
+
+```bash
+music-downloader --vk-login
+# или сразу с загрузкой трека
+music-downloader --vk-login "https://vk.com/audio-2001370911_36370911"
+```
+
+Вручную то же самое выглядит так:
 
 1. Откройте <https://vkhost.github.io>, выберите **Kate Mobile** и подтвердите
    доступ.
@@ -109,11 +121,20 @@ VK не отдаёт музыку без авторизации, а обычны
 music-downloader --vk-token "<Токен VK>" "https://vk.com/audio-2001370911_36370911"
 # или
 MUSIC_DOWNLOADER_VK_TOKEN="<Токен VK>" music-downloader "https://vk.ru/audio-2001370911_36370911"
+# токен из stdin, чтобы не оставлять его в истории shell
+echo "<Токен VK>" | music-downloader --vk-token - "https://vk.ru/audio-2001370911_36370911"
 ```
 
-Флаг `--vk-token` сохраняет токен в `~/.config/music-downloader/vk_token`
-(файл создаётся с правами `600`). Переменная
-`MUSIC_DOWNLOADER_VK_TOKEN_FILE` задаёт другой путь.
+В `--vk-token` и `MUSIC_DOWNLOADER_VK_TOKEN` можно передать и весь URL
+`https://oauth.vk.com/blank.html#access_token=...` — программа сама выделит
+токен. Флаг `--vk-token` сохраняет токен в
+`~/.config/music-downloader/vk_token` (файл создаётся с правами `600`).
+Переменная `MUSIC_DOWNLOADER_VK_TOKEN_FILE` задаёт другой путь.
+
+Почему нельзя совсем как у Яндекса: у Яндекс.Музыки есть публичный OAuth-клиент
+и Device Flow, а VK закрыл `audio.*` для сторонних приложений и device flow не
+поддерживает. Поэтому автоматическим остаётся всё, кроме самого подтверждения
+доступа в браузере.
 
 ## Использование
 
@@ -180,7 +201,8 @@ music-downloader --vk-token "<Токен VK>" \
 | `--path-pattern <шаблон>` | Шаблон пути (см. ниже). |
 | `--unsafe-path` | Не очищать путь от недопустимых символов. |
 | `--token <токен>` | Токен Яндекс.Музыки. |
-| `--vk-token <токен>` | Токен Kate Mobile для VK. |
+| `--vk-token <токен>` | Токен Kate Mobile для VK; `-` читает токен из stdin. |
+| `--vk-login` | Интерактивно получить и сохранить токен VK. |
 | `-h`, `--help` | Справка. |
 | `-V`, `--version` | Версия. |
 

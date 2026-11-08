@@ -80,6 +80,78 @@ pub fn parse_audio_link(input: &str) -> Option<AudioId> {
     })
 }
 
+/// Извлекает `access_token` из строки, которую пользователь копирует после
+/// авторизации. Принимает и полный URL (`https://oauth.vk.com/blank.html#access_token=...`),
+/// и сам токен.
+pub fn extract_access_token(input: &str) -> Option<String> {
+    let input = input.trim();
+    if input.is_empty() {
+        return None;
+    }
+
+    if let Some(index) = input.find("access_token=") {
+        let rest = &input[index + "access_token=".len()..];
+        let end = rest
+            .find(['&', '#', ' ', '\t', '\r', '\n'])
+            .unwrap_or(rest.len());
+        return valid_token(&rest[..end]);
+    }
+
+    valid_token(input)
+}
+
+/// VK-токены состоят из ASCII-букв, цифр и `_-.`; всё остальное — не токен.
+fn valid_token(token: &str) -> Option<String> {
+    let token = token.trim();
+    if token.is_empty() || token.len() > 512 {
+        return None;
+    }
+    let allowed = token
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.'));
+    allowed.then(|| token.to_string())
+}
+
+/// Пользователь из ответа `users.get`.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct VkUser {
+    #[serde(default, deserialize_with = "lenient_i64")]
+    pub id: Option<i64>,
+    #[serde(default)]
+    pub first_name: Option<String>,
+    #[serde(default)]
+    pub last_name: Option<String>,
+    #[serde(default)]
+    pub screen_name: Option<String>,
+}
+
+impl VkUser {
+    /// Имя для сообщений: «Имя Фамилия», иначе `@screen_name`, иначе `id<id>`.
+    pub fn display_name(&self) -> String {
+        let name = [self.first_name.as_deref(), self.last_name.as_deref()]
+            .into_iter()
+            .flatten()
+            .map(str::trim)
+            .filter(|part| !part.is_empty())
+            .collect::<Vec<_>>()
+            .join(" ");
+        if !name.is_empty() {
+            return name;
+        }
+        if let Some(screen_name) = self
+            .screen_name
+            .as_deref()
+            .filter(|value| !value.is_empty())
+        {
+            return format!("@{screen_name}");
+        }
+        match self.id {
+            Some(id) => format!("id{id}"),
+            None => "неизвестный аккаунт".to_string(),
+        }
+    }
+}
+
 /// Аудиозапись из ответа `audio.getById`.
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct VkAudio {
@@ -299,6 +371,30 @@ impl VkClient {
         })
     }
 
+    /// Проверяет токен и возвращает аккаунт через `users.get`.
+    pub fn current_user(&self) -> ApiResult<VkUser> {
+        let url = format!("{}/users.get", self.api_base.trim_end_matches('/'));
+        self.with_retries(|| {
+            let request = self
+                .agent
+                .get(&url)
+                .header("User-Agent", VK_USER_AGENT)
+                .query("fields", "screen_name")
+                .query("access_token", self.token.as_str())
+                .query("v", self.api_version.as_str());
+
+            log::debug!("VK users.get");
+            match request.call() {
+                Ok(response) => self
+                    .read_body(response)
+                    .and_then(|body| parse_user_response(&body)),
+                Err(error) => Err(ApiError::Network(format!(
+                    "Ошибка запроса к VK API: {error}"
+                ))),
+            }
+        })
+    }
+
     /// Скачивает аудиофайл по прямой ссылке.
     pub fn download(&self, url: &str) -> ApiResult<Vec<u8>> {
         let body = self.with_retries(|| {
@@ -343,21 +439,8 @@ fn parse_audio_response(body: &[u8], requested: AudioId) -> ApiResult<VkAudio> {
     let value: Value = serde_json::from_slice(body)
         .map_err(|error| ApiError::Fatal(format!("Некорректный ответ VK API: {error}")))?;
 
-    if let Some(error) = value.get("error") {
-        let code = error
-            .get("error_code")
-            .and_then(Value::as_i64)
-            .unwrap_or_default();
-        let message = error
-            .get("error_msg")
-            .and_then(Value::as_str)
-            .unwrap_or("неизвестная ошибка");
-        let text = explain_error(code, format!("VK API: {message} (код {code})"));
-        return Err(if matches!(code, 6 | 10) || code >= 500 {
-            ApiError::Network(text)
-        } else {
-            ApiError::Fatal(text)
-        });
+    if let Some(error) = api_error(&value) {
+        return Err(error);
     }
 
     let response = value
@@ -371,6 +454,45 @@ fn parse_audio_response(body: &[u8], requested: AudioId) -> ApiResult<VkAudio> {
             "VK не вернул аудиозапись {}: она удалена, скрыта или недоступна аккаунту",
             requested.api_id()
         ))
+    })
+}
+
+fn parse_user_response(body: &[u8]) -> ApiResult<VkUser> {
+    let value: Value = serde_json::from_slice(body)
+        .map_err(|error| ApiError::Fatal(format!("Некорректный ответ VK API: {error}")))?;
+
+    if let Some(error) = api_error(&value) {
+        return Err(error);
+    }
+
+    let response = value
+        .get("response")
+        .ok_or_else(|| ApiError::Fatal("VK API вернул ответ без поля response".to_string()))?;
+    let users: Vec<VkUser> = serde_json::from_value(response.clone())
+        .map_err(|error| ApiError::Fatal(format!("Не удалось разобрать ответ VK API: {error}")))?;
+
+    users
+        .into_iter()
+        .next()
+        .ok_or_else(|| ApiError::Fatal("VK не вернул данные аккаунта".to_string()))
+}
+
+/// Превращает поле `error` из ответа VK API в ошибку клиента.
+fn api_error(value: &Value) -> Option<ApiError> {
+    let error = value.get("error")?;
+    let code = error
+        .get("error_code")
+        .and_then(Value::as_i64)
+        .unwrap_or_default();
+    let message = error
+        .get("error_msg")
+        .and_then(Value::as_str)
+        .unwrap_or("неизвестная ошибка");
+    let text = explain_error(code, format!("VK API: {message} (код {code})"));
+    Some(if matches!(code, 6 | 10) || code >= 500 {
+        ApiError::Network(text)
+    } else {
+        ApiError::Fatal(text)
     })
 }
 

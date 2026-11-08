@@ -1,7 +1,7 @@
 use std::collections::HashMap;
-use std::io::Write as _;
+use std::io::{self, IsTerminal as _, Write as _};
 use std::path::{Path, PathBuf};
-use std::process::ExitCode;
+use std::process::{Command, ExitCode, Stdio};
 use std::sync::OnceLock;
 use std::time::Duration;
 use std::time::Instant;
@@ -261,9 +261,17 @@ struct Args {
         long,
         help_heading = "Авторизация",
         value_name = "Токен VK",
-        help = "Токен Kate Mobile для ссылок vk.com/vk.ru. Если не указан, читается из MUSIC_DOWNLOADER_VK_TOKEN или сохранённого файла"
+        help = "Токен Kate Mobile для ссылок vk.com/vk.ru. Если не указан, читается из MUSIC_DOWNLOADER_VK_TOKEN или сохранённого файла. Значение `-` читает токен из stdin"
     )]
     vk_token: Option<String>,
+
+    #[arg(
+        long,
+        help_heading = "Авторизация",
+        conflicts_with = "vk_token",
+        help = "Интерактивно получить токен VK: открыть браузер, принять вставленный URL или токен, проверить и сохранить"
+    )]
+    vk_login: bool,
 }
 
 struct DownloadableTrack {
@@ -397,6 +405,10 @@ fn run(mut args: Args) -> Result<()> {
         && args.playlist_id.is_none()
         && args.url.is_none()
     {
+        if args.vk_login {
+            vk_login(&args)?;
+            return Ok(());
+        }
         bail!("Не указан ID или URL. Используйте --help");
     }
 
@@ -518,20 +530,33 @@ fn run_vk(args: Args, audio_id: AudioId) -> Result<()> {
 }
 
 fn resolve_vk_token(args: &Args) -> Result<String> {
-    if let Some(token) = args
+    if args.vk_login {
+        return vk_login(args);
+    }
+
+    if let Some(raw) = args
         .vk_token
         .as_deref()
         .map(str::trim)
         .filter(|token| !token.is_empty())
     {
-        save_vk_token(token);
-        return Ok(token.to_string());
+        let raw = if raw == "-" {
+            read_line("")?
+        } else {
+            raw.to_string()
+        };
+        let token = vk::extract_access_token(&raw).ok_or_else(|| {
+            anyhow!("Не удалось разобрать VK-токен: ожидается access_token или URL с ним")
+        })?;
+        save_vk_token(&token);
+        return Ok(token);
     }
 
     if let Ok(value) = std::env::var("MUSIC_DOWNLOADER_VK_TOKEN") {
         let value = value.trim();
         if !value.is_empty() {
-            return Ok(value.to_string());
+            let token = vk::extract_access_token(value).unwrap_or_else(|| value.to_string());
+            return Ok(token);
         }
     }
 
@@ -544,9 +569,104 @@ fn resolve_vk_token(args: &Args) -> Result<String> {
         .map(|path| path.display().to_string())
         .unwrap_or_else(|| "~/.config/music-downloader/vk_token".to_string());
     bail!(
-        "Для VK нужен токен Kate Mobile. Получите его на https://vkhost.github.io (Kate Mobile), \
-         затем передайте через --vk-token, переменную окружения MUSIC_DOWNLOADER_VK_TOKEN или сохраните в {location}"
+        "Для VK нужен токен Kate Mobile. Запустите с --vk-login, чтобы получить и сохранить его \
+         интерактивно, либо получите токен на https://vkhost.github.io (Kate Mobile) и передайте \
+         через --vk-token, переменную окружения MUSIC_DOWNLOADER_VK_TOKEN или сохраните в {location}"
     )
+}
+
+/// Ссылка, где можно получить токен Kate Mobile.
+const VK_TOKEN_URL: &str = "https://vkhost.github.io/";
+
+/// Полуавтоматическое получение токена VK.
+///
+/// Полностью автоматический OAuth, как у Яндекс.Музыки, для VK невозможен:
+/// методов `audio.*` нет у сторонних приложений, а device flow VK не
+/// поддерживает. Поэтому пользователь проходит авторизацию в браузере сам, а
+/// программа забирает результат, проверяет токен и сохраняет его.
+fn vk_login(args: &Args) -> Result<String> {
+    println!("VK не выдаёт доступ к музыке сторонним приложениям, поэтому вход нельзя");
+    println!("сделать полностью автоматическим, как у Яндекс.Музыки.");
+    println!();
+    println!("1. Откройте {VK_TOKEN_URL} и выберите Kate Mobile.");
+    println!("2. Разрешите доступ и скопируйте адрес страницы целиком");
+    println!("   (https://oauth.vk.com/blank.html#access_token=...) или сам access_token.");
+    if io::stdout().is_terminal() && !open_browser(VK_TOKEN_URL) {
+        println!("Браузер открыть не удалось — откройте ссылку вручную.");
+    }
+    println!();
+
+    let input = read_line("Вставьте URL или access_token: ")?;
+    let token = vk::extract_access_token(&input).ok_or_else(|| {
+        anyhow!("Это не похоже на VK-токен: ожидается access_token или URL с access_token=")
+    })?;
+
+    let client = vk::VkClient::new(
+        token.clone(),
+        args.timeout,
+        u32::try_from(args.tries).unwrap_or(u32::MAX),
+        args.retry_delay,
+    );
+    let user = client
+        .current_user()
+        .map_err(|error| anyhow!("Токен не подошёл: {error}"))?;
+    println!("Токен действителен, аккаунт: {}", user.display_name());
+
+    save_vk_token(&token);
+    Ok(token)
+}
+
+/// Читает одну строку из stdin; пустое приглашение отключает подсказку.
+fn read_line(prompt: &str) -> Result<String> {
+    if !prompt.is_empty() {
+        eprint!("{prompt}");
+        io::stderr()
+            .flush()
+            .context("Не удалось вывести приглашение")?;
+    }
+
+    let mut buffer = String::new();
+    io::stdin()
+        .read_line(&mut buffer)
+        .context("Не удалось прочитать строку из stdin")?;
+
+    let line = buffer.trim();
+    if line.is_empty() {
+        bail!("Пустой ввод");
+    }
+    Ok(line.to_string())
+}
+
+/// Открывает URL в браузере по умолчанию. Возвращает `false`, если запустить
+/// браузер не удалось (тогда ссылку нужно открыть вручную).
+fn open_browser(url: &str) -> bool {
+    #[cfg(target_os = "windows")]
+    let mut command = {
+        let mut command = Command::new("cmd");
+        command.args(["/C", "start", "", url]);
+        command
+    };
+
+    #[cfg(target_os = "macos")]
+    let mut command = {
+        let mut command = Command::new("open");
+        command.arg(url);
+        command
+    };
+
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let mut command = {
+        let mut command = Command::new("xdg-open");
+        command.arg(url);
+        command
+    };
+
+    command
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .is_ok()
 }
 
 fn load_saved_vk_token() -> Option<String> {

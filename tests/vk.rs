@@ -1,4 +1,6 @@
-use music_downloader::vk::{mp3_url, parse_audio_link, AudioId, VkAudio};
+use music_downloader::vk::{
+    extract_access_token, mp3_url, parse_audio_link, AudioId, VkAudio, VkUser,
+};
 
 #[test]
 fn parses_vk_audio_links() {
@@ -89,4 +91,49 @@ fn parses_api_response_and_builds_track() {
     assert_eq!(track.artists[0].name.as_deref(), Some("Artist"));
     assert_eq!(track.duration_ms, Some(215_000));
     assert!(track.albums.is_empty());
+}
+
+#[test]
+fn extracts_token_from_pasted_url_or_token() {
+    assert_eq!(
+        extract_access_token(
+            "https://oauth.vk.com/blank.html#access_token=vk1.a.ABC_def-123&expires_in=0&user_id=1"
+        )
+        .as_deref(),
+        Some("vk1.a.ABC_def-123")
+    );
+    assert_eq!(
+        extract_access_token("  vk1.a.token_123  ").as_deref(),
+        Some("vk1.a.token_123")
+    );
+    assert_eq!(
+        extract_access_token("https://vk.com/audio1_2").as_deref(),
+        None
+    );
+    assert_eq!(extract_access_token("").as_deref(), None);
+    assert_eq!(extract_access_token("   ").as_deref(), None);
+}
+
+#[test]
+fn formats_account_names() {
+    let user = VkUser {
+        id: Some(42),
+        first_name: Some("Иван".to_string()),
+        last_name: Some("Петров".to_string()),
+        screen_name: Some("ivan".to_string()),
+    };
+    assert_eq!(user.display_name(), "Иван Петров");
+
+    let user = VkUser {
+        id: Some(42),
+        screen_name: Some("ivan".to_string()),
+        ..VkUser::default()
+    };
+    assert_eq!(user.display_name(), "@ivan");
+
+    let user = VkUser {
+        id: Some(42),
+        ..VkUser::default()
+    };
+    assert_eq!(user.display_name(), "id42");
 }
