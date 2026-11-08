@@ -145,10 +145,10 @@ fn reads_cookies_from_header() {
     assert_eq!(cookies, "p=abc123; remixsid=def456");
 
     // Заголовок передаётся как есть: порядок и одноимённые куки важны.
-    let header = "Cookie: remixlang=0; remixsid=def; YandexBrowser=1; remixsid=ghi";
+    let header = "Cookie: remixlang=0; p=abc; remixsid=def; YandexBrowser=1; remixsid=ghi";
     assert_eq!(
         extract_vk_cookies(header).unwrap(),
-        "remixlang=0; remixsid=def; YandexBrowser=1; remixsid=ghi"
+        "remixlang=0; p=abc; remixsid=def; YandexBrowser=1; remixsid=ghi"
     );
 }
 
@@ -168,22 +168,21 @@ fn reads_cookies_from_json_export() {
 }
 
 #[test]
-fn accepts_any_session_cookie_without_p() {
+fn requires_p_and_a_session_cookie() {
     assert_eq!(
-        extract_vk_cookies("remixnsid=def").unwrap(),
-        "remixnsid=def"
+        extract_vk_cookies("p=abc; remixnsid=def").unwrap(),
+        "p=abc; remixnsid=def"
     );
-    assert_eq!(
-        extract_vk_cookies("remixsid=def; remixdsid=ghi").unwrap(),
-        "remixsid=def; remixdsid=ghi"
-    );
+    let error = extract_vk_cookies("remixsid=def").unwrap_err().to_string();
+    assert!(error.contains("нет p"), "{error}");
 }
 
 #[test]
 fn filters_cookies_of_other_sites() {
     let text = ".example.com\tTRUE\t/\tTRUE\t1800000000\tsessionid\tsecret\n\
+        .vk.ru\tTRUE\t/\tTRUE\t1800000000\tp\tabc\n\
         .vk.ru\tTRUE\t/\tTRUE\t1800000000\tremixsid\tdef\n";
-    assert_eq!(extract_vk_cookies(text).unwrap(), "remixsid=def");
+    assert_eq!(extract_vk_cookies(text).unwrap(), "p=abc; remixsid=def");
 }
 
 #[test]

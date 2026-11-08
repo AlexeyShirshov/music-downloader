@@ -186,7 +186,7 @@ pub fn web_token(cookies: &str, timeout_secs: u64) -> ApiResult<WebToken> {
     // Сначала весь заголовок, потом только куки сессии: лишняя/устаревшая
     // кука иногда мешает VK подтвердить сессию.
     let mut variants = vec![cookies.to_string()];
-    if let Some(session) = session_cookies(cookies) {
+    if let Some(session) = essential_cookies(cookies) {
         if session != cookies {
             variants.push(session);
         }
@@ -275,8 +275,8 @@ pub fn web_token(cookies: &str, timeout_secs: u64) -> ApiResult<WebToken> {
     Err(last_error.unwrap_or_else(|| ApiError::Fatal("VK не выдал токен".to_string())))
 }
 
-/// Оставляет в заголовке только куки сессии VK.
-fn session_cookies(header: &str) -> Option<String> {
+/// Оставляет в заголовке только куки, нужные для получения токена.
+fn essential_cookies(header: &str) -> Option<String> {
     let mut cookies = Vec::new();
     for item in header.split(';') {
         let Some((name, value)) = item.split_once('=') else {
@@ -284,7 +284,7 @@ fn session_cookies(header: &str) -> Option<String> {
         };
         let name = name.trim();
         let value = value.trim();
-        if is_session_cookie(name) && !value.is_empty() {
+        if is_essential_cookie(name) && !value.is_empty() {
             cookies.push(format!("{name}={value}"));
         }
     }
@@ -347,16 +347,12 @@ pub fn extract_vk_cookies(input: &str) -> Result<String> {
             .unwrap_or(text)
             .trim()
             .to_string();
-        if !header
+        let pairs: Vec<(String, String)> = header
             .split(';')
             .filter_map(|item| item.split_once('='))
-            .any(|(name, value)| is_session_cookie(name.trim()) && !value.trim().is_empty())
-        {
-            bail!(
-                "Не нашёл куку сессии VK (remixsid). Скопируйте строку Cookie целиком из DevTools: \
-                 Network → любой запрос к vk.ru → Request Headers → Cookie"
-            );
-        }
+            .map(|(name, value)| (name.trim().to_string(), value.trim().to_string()))
+            .collect();
+        validate_cookies(&pairs)?;
         return Ok(header);
     }
 
@@ -367,15 +363,7 @@ pub fn extract_vk_cookies(input: &str) -> Result<String> {
         collect_netscape_cookies(text, &mut cookies);
     }
 
-    if !cookies
-        .iter()
-        .any(|(name, value)| is_session_cookie(name) && !value.is_empty())
-    {
-        bail!(
-            "Не нашёл куку сессии VK (remixsid). Скопируйте строку Cookie целиком из DevTools: \
-             Network → любой запрос к vk.ru → Request Headers → Cookie"
-        );
-    }
+    validate_cookies(&cookies)?;
 
     Ok(cookies
         .into_iter()
@@ -384,9 +372,29 @@ pub fn extract_vk_cookies(input: &str) -> Result<String> {
         .join("; "))
 }
 
-/// Куки, которыми VK подтверждает вход.
-fn is_session_cookie(name: &str) -> bool {
-    matches!(name, "remixsid" | "remixnsid" | "remixdsid")
+const COOKIE_HINT: &str = "Куки p и remixsid лежат на разных доменах: p — на login.vk.ru, \
+     поэтому в заголовке страницы vk.ru её нет. Откройте DevTools → Network, выполните \
+     сниппет из консоли, затем откройте запрос web_token → Request Headers → Cookie и \
+     скопируйте этот заголовок целиком";
+
+fn validate_cookies(cookies: &[(String, String)]) -> Result<()> {
+    let has = |name: &str| {
+        cookies
+            .iter()
+            .any(|(cookie, value)| cookie == name && !value.is_empty())
+    };
+    if !has("remixsid") && !has("remixnsid") && !has("remixdsid") {
+        bail!("В куках нет remixsid. {COOKIE_HINT}");
+    }
+    if !has("p") {
+        bail!("В куках нет p — без неё VK не выдаёт токен. {COOKIE_HINT}");
+    }
+    Ok(())
+}
+
+/// Куки, без которых VK не выдаёт токен.
+fn is_essential_cookie(name: &str) -> bool {
+    matches!(name, "p" | "sui" | "remixsid" | "remixnsid" | "remixdsid")
 }
 
 fn is_vk_domain(domain: &str) -> bool {

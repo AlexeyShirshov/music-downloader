@@ -262,7 +262,7 @@ struct Args {
         long,
         help_heading = "Авторизация",
         value_name = "Куки VK",
-        help = "Строка Cookie из браузера целиком (там remixsid) или путь к cookies.txt. Значение `-` читает куки из stdin"
+        help = "Строка Cookie из браузера целиком (нужны p и remixsid) или путь к cookies.txt. Значение `-` читает куки из stdin"
     )]
     vk_cookies: Option<String>,
 
@@ -704,14 +704,8 @@ fn vk_login(args: &Args) -> Result<String> {
     println!("Вход идёт через куки вашего браузера:");
     println!();
     println!("1. Войдите в VK: {VK_LOGIN_PAGE}");
-    println!("2. Нажмите F12 → вкладка Network (Сеть) → обновите страницу (F5)");
-    println!("3. Выберите любой запрос к vk.ru (обычно самый верхний)");
-    println!("4. Справа: Headers → Request Headers → строка Cookie");
-    println!("5. Скопируйте значение Cookie целиком (правый клик → Copy value)");
-    println!("6. Вставьте сюда (правый клик или Ctrl+V) и нажмите Enter");
-    println!();
-    println!("Если так не получается, откройте в браузере консоль (Console) на vk.ru и");
-    println!("выполните — она вернёт готовый токен:");
+    println!("2. Нажмите F12 → вкладка Network (Сеть)");
+    println!("3. Откройте Console (Консоль) на vk.ru и выполните:");
     println!();
     println!("  fetch('https://login.vk.ru/?act=web_token', {{");
     println!("    method: 'POST',");
@@ -719,6 +713,14 @@ fn vk_login(args: &Args) -> Result<String> {
     println!("    body: 'version=1&app_id={}',", vk::VK_WEB_CLIENT_ID);
     println!("    credentials: 'include'");
     println!("  }}).then(r => r.json()).then(d => console.log(d.data.access_token))");
+    println!();
+    println!("4. В Network появится запрос web_token → Headers → Request Headers → Cookie");
+    println!("5. Скопируйте значение Cookie целиком (правый клик → Copy value)");
+    println!("6. Вставьте сюда (правый клик или Ctrl+V) и нажмите Enter");
+    println!();
+    println!("Нужен именно Cookie запроса web_token: кука p живёт на login.vk.ru и");
+    println!("в заголовке страницы vk.ru её нет. Готовый токен из шага 3 тоже подойдёт,");
+    println!("но он живёт ~15 минут.");
     println!();
     if !browser_disabled() {
         if let Err(error) = open_browser(VK_LOGIN_PAGE) {
