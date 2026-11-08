@@ -8,6 +8,8 @@ use regex::Regex;
 use crate::models::{Album, Track};
 
 pub const DEFAULT_PATH_PATTERN: &str = "#album-artist/#album/#number - #title";
+/// У аудиозаписей VK нет альбома и номера трека.
+pub const DEFAULT_VK_PATH_PATTERN: &str = "#track-artist/#title";
 pub const DEFAULT_COVER_RESOLUTION: i64 = 400;
 
 /// 255 минус самый длинный суффикс (".flac").

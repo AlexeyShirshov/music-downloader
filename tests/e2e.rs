@@ -167,6 +167,23 @@ fn handle(mut stream: TcpStream, address: SocketAddr, cover: &[u8], audio: &[u8]
             .into_bytes(),
         ),
         "/file" => (200, "audio/mpeg", audio.to_vec()),
+        "/method/audio.getById" => (
+            200,
+            "application/json",
+            json!({
+                "response": [{
+                    "id": 36370911,
+                    "owner_id": -2001370911,
+                    "artist": "VK Artist",
+                    "title": "VK Song",
+                    "duration": 215,
+                    "url": format!("http://{address}/vkfile")
+                }]
+            })
+            .to_string()
+            .into_bytes(),
+        ),
+        "/vkfile" => (200, "audio/mpeg", audio.to_vec()),
         "/lyrics.txt" => (200, "text/plain", b"line1\nline2".to_vec()),
         "/lyrics.lrc" => (
             200,
@@ -237,9 +254,11 @@ fn handle(mut stream: TcpStream, address: SocketAddr, cover: &[u8], audio: &[u8]
 }
 
 fn run_downloader(server: &MockServer, dir: &Path, args: &[&str]) -> std::process::Output {
-    Command::new(env!("CARGO_BIN_EXE_ymd"))
-        .env("YMD_API_BASE_URL", server.api_base())
-        .env("YMD_COVER_BASE_URL", "http://")
+    Command::new(env!("CARGO_BIN_EXE_music-downloader"))
+        .env("MUSIC_DOWNLOADER_API_BASE_URL", server.api_base())
+        .env("MUSIC_DOWNLOADER_COVER_BASE_URL", "http://")
+        .env("MUSIC_DOWNLOADER_TOKEN_FILE", dir.join("token"))
+        .env("MUSIC_DOWNLOADER_VK_TOKEN_FILE", dir.join("vk_token"))
         .env("RUST_LOG", "debug")
         .arg("--token")
         .arg("test-token")
@@ -249,7 +268,7 @@ fn run_downloader(server: &MockServer, dir: &Path, args: &[&str]) -> std::proces
         .arg("0")
         .args(args)
         .output()
-        .expect("run ymd")
+        .expect("run music-downloader")
 }
 
 fn fixtures() -> (Vec<u8>, Vec<u8>) {
@@ -436,4 +455,54 @@ fn skip_existing_does_not_download_twice() {
     let second = run_downloader(&server, dir.path(), &["--album-id", "1", "--skip-existing"]);
     assert!(second.status.success());
     assert!(!String::from_utf8_lossy(&second.stdout).contains("Загружается"));
+}
+
+#[test]
+fn vk_track_download_end_to_end() {
+    let (cover, audio) = fixtures();
+    let server = MockServer::start(cover, audio);
+    let dir = tempfile::tempdir().unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_music-downloader"))
+        .env(
+            "MUSIC_DOWNLOADER_VK_API_BASE_URL",
+            format!("{}/method", server.api_base()),
+        )
+        .env(
+            "MUSIC_DOWNLOADER_VK_TOKEN_FILE",
+            dir.path().join("vk_token"),
+        )
+        .arg("--vk-token")
+        .arg("test-vk-token")
+        .arg("--dir")
+        .arg(dir.path())
+        .arg("https://vk.ru/audio-2001370911_36370911")
+        .output()
+        .expect("run music-downloader");
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("VK Artist/VK Song.mp3"), "{stdout}");
+
+    let file = dir.path().join("VK Artist/VK Song.mp3");
+    assert!(file.is_file(), "downloaded VK track exists");
+
+    let tag = lofty::read_from_path(&file)
+        .unwrap()
+        .primary_tag()
+        .unwrap()
+        .clone();
+    assert_eq!(
+        tag.get_string(lofty::tag::ItemKey::TrackTitle),
+        Some("VK Song")
+    );
+    assert_eq!(
+        tag.get_string(lofty::tag::ItemKey::TrackArtist),
+        Some("VK Artist")
+    );
 }

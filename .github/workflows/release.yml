@@ -1,74 +1,124 @@
 name: Release
 
 on:
-  push:
-    tags:
-      - "v*"
   workflow_dispatch:
     inputs:
-      version:
-        description: "Тег релиза, например v3.5.6"
+      bump:
+        description: "Как повысить версию"
         required: true
-        type: string
+        default: patch
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
+          - none
 
 permissions:
   contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
 
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  prepare-release:
-    name: Prepare release
+  check:
+    name: Check
     runs-on: ubuntu-24.04
     steps:
-      - name: Create release if missing
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ inputs.version || github.ref_name }}
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --check
+      - run: cargo clippy --all-targets -- -D warnings
+      - run: cargo test --locked
+
+  version:
+    name: Bump version
+    needs: check
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.bump.outputs.version }}
+      tag: ${{ steps.bump.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Configure git
         run: |
-          gh release view "$TAG" -R "${{ github.repository }}" >/dev/null 2>&1 || gh release create "$TAG" \
-            -R "${{ github.repository }}" \
-            --title "$TAG" \
-            --notes "Rust port of yandex-music-downloader: self-contained binaries for Linux, Windows and macOS. No Python, pip or VC++ Redistributable required."
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Bump version
+        id: bump
+        run: bash scripts/bump-version.sh "${{ inputs.bump }}"
+
+      - name: Commit and tag
+        env:
+          TAG: ${{ steps.bump.outputs.tag }}
+        run: |
+          if git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
+            echo "::error::Тег $TAG уже существует"
+            exit 1
+          fi
+          git add Cargo.toml Cargo.lock
+          if ! git diff --cached --quiet; then
+            git commit -m "chore(release): $TAG"
+          fi
+          git tag -a "$TAG" -m "Release $TAG"
+          git push origin "HEAD:${GITHUB_REF_NAME}"
+          git push origin "$TAG"
 
   build:
     name: ${{ matrix.artifact }}
-    needs: prepare-release
+    needs: version
     runs-on: ${{ matrix.os }}
-    continue-on-error: ${{ matrix.continue-on-error || false }}
+    continue-on-error: ${{ matrix.optional || false }}
     strategy:
       fail-fast: false
       matrix:
         include:
           - os: ubuntu-24.04
             target: x86_64-unknown-linux-musl
-            artifact: ymd-linux-x86_64
-            binary: ymd
+            artifact: music-downloader-linux-x86_64
+            binary: music-downloader
             musl: true
           - os: macos-latest
             target: aarch64-apple-darwin
-            artifact: ymd-macos-arm64
-            binary: ymd
-            continue-on-error: true
+            artifact: music-downloader-macos-arm64
+            binary: music-downloader
+            optional: true
           - os: macos-latest
             target: x86_64-apple-darwin
-            artifact: ymd-macos-x86_64
-            binary: ymd
-            continue-on-error: true
+            artifact: music-downloader-macos-x86_64
+            binary: music-downloader
+            optional: true
           - os: windows-latest
             target: x86_64-pc-windows-msvc
-            artifact: ymd-windows-x86_64.exe
-            binary: ymd.exe
+            artifact: music-downloader-windows-x86_64.exe
+            binary: music-downloader.exe
             crt_static: true
 
     steps:
       - uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.version.outputs.tag }}
 
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
 
       - name: Install musl tools
         if: matrix.musl
@@ -76,38 +126,57 @@ jobs:
 
       - name: Build (Linux musl)
         if: matrix.musl
-        working-directory: rust
         env:
           CC_x86_64_unknown_linux_musl: musl-gcc
-        run: cargo build --release --target ${{ matrix.target }}
+        run: cargo build --release --locked --target ${{ matrix.target }}
 
       - name: Build (Windows, static CRT)
         if: matrix.crt_static
-        working-directory: rust
         env:
           RUSTFLAGS: -C target-feature=+crt-static
-        run: cargo build --release --target ${{ matrix.target }}
+        run: cargo build --release --locked --target ${{ matrix.target }}
 
       - name: Build (macOS)
         if: ${{ !matrix.musl && !matrix.crt_static }}
-        working-directory: rust
-        run: cargo build --release --target ${{ matrix.target }}
+        run: cargo build --release --locked --target ${{ matrix.target }}
 
-      - name: Upload binary to release (Unix)
-        if: matrix.os != 'windows-latest'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ inputs.version || github.ref_name }}
-        run: |
-          cp "rust/target/${{ matrix.target }}/release/${{ matrix.binary }}" "${{ matrix.artifact }}"
-          gh release upload "$TAG" "${{ matrix.artifact }}" --clobber -R "${{ github.repository }}"
-
-      - name: Upload binary to release (Windows)
-        if: matrix.os == 'windows-latest'
+      - name: Prepare artifact
         shell: bash
+        run: |
+          mkdir -p dist
+          cp "target/${{ matrix.target }}/release/${{ matrix.binary }}" "dist/${{ matrix.artifact }}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: dist/${{ matrix.artifact }}
+          if-no-files-found: error
+          retention-days: 1
+
+  publish:
+    name: Publish release
+    needs: [version, build]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Checksums
+        run: cd dist && sha256sum * > SHA256SUMS
+
+      - name: Create or update release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ inputs.version || github.ref_name }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ needs.version.outputs.tag }}
         run: |
-          cp "rust/target/${{ matrix.target }}/release/${{ matrix.binary }}" "${{ matrix.artifact }}"
-          gh release upload "$TAG" "${{ matrix.artifact }}" --clobber -R "${{ github.repository }}"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" dist/* --clobber
+          else
+            gh release create "$TAG" dist/* \
+              --title "$TAG" \
+              --generate-notes \
+              --verify-tag
+          fi

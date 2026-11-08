@@ -757,6 +757,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "music-downloader"
+version = "1.0.0"
+dependencies = [
+ "aes",
+ "anyhow",
+ "base64 0.22.1",
+ "chrono",
+ "clap",
+ "ctr",
+ "env_logger",
+ "hex",
+ "hmac",
+ "lofty",
+ "log",
+ "rand",
+ "regex",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "ureq",
+ "url",
+]
+
+[[package]]
 name = "num-traits"
 version = "0.2.19"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1457,31 +1482,6 @@ name = "writeable"
 version = "0.6.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3ad82d2a33cdc9674dc7465672f271e096168fcdbe0f799d9e6db8c5892679dc"
-
-[[package]]
-name = "yandex-music-downloader"
-version = "3.5.6"
-dependencies = [
- "aes",
- "anyhow",
- "base64 0.22.1",
- "chrono",
- "clap",
- "ctr",
- "env_logger",
- "hex",
- "hmac",
- "lofty",
- "log",
- "rand",
- "regex",
- "serde",
- "serde_json",
- "sha2",
- "tempfile",
- "ureq",
- "url",
-]
 
 [[package]]
 name = "yoke"

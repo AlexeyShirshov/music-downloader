@@ -75,10 +75,10 @@ impl Client {
             .http_status_as_error(false)
             .build();
 
-        let api_base =
-            std::env::var("YMD_API_BASE_URL").unwrap_or_else(|_| DEFAULT_API_BASE.to_string());
-        let cover_base =
-            std::env::var("YMD_COVER_BASE_URL").unwrap_or_else(|_| DEFAULT_COVER_BASE.to_string());
+        let api_base = std::env::var("MUSIC_DOWNLOADER_API_BASE_URL")
+            .unwrap_or_else(|_| DEFAULT_API_BASE.to_string());
+        let cover_base = std::env::var("MUSIC_DOWNLOADER_COVER_BASE_URL")
+            .unwrap_or_else(|_| DEFAULT_COVER_BASE.to_string());
 
         Self {
             agent: config.into(),

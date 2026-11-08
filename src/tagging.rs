@@ -116,6 +116,35 @@ pub fn set_tags(
 ) -> Result<()> {
     let empty_album = Album::default();
     let album = track.albums.first().unwrap_or(&empty_album);
+    let track_url = format!(
+        "https://music.yandex.ru/album/{}/track/{}",
+        album.id.as_deref().unwrap_or("None"),
+        track.id.as_deref().unwrap_or("None"),
+    );
+
+    set_tags_with_url(
+        path,
+        track,
+        container,
+        lyrics,
+        album_cover,
+        compatibility_level,
+        &track_url,
+    )
+}
+
+/// Записывает теги и ссылку на источник в кадр `WOAF`/комментарий.
+pub fn set_tags_with_url(
+    path: &Path,
+    track: &Track,
+    container: Container,
+    lyrics: Option<&str>,
+    album_cover: Option<&AlbumCover>,
+    compatibility_level: i64,
+    track_url: &str,
+) -> Result<()> {
+    let empty_album = Album::default();
+    let album = track.albums.first().unwrap_or(&empty_album);
     let album_title = album_title(album);
     let track_title = track_title(track);
 
@@ -142,16 +171,12 @@ pub fn set_tags(
     let (iso_date, release_year) = release_date_parts(album)?;
     let date_text = iso_date.clone().or_else(|| release_year.clone());
 
-    let track_url = format!(
-        "https://music.yandex.ru/album/{}/track/{}",
-        album.id.as_deref().unwrap_or("None"),
-        track.id.as_deref().unwrap_or("None"),
-    );
-
     let mut tag = Tag::new(tag_type_for(container));
 
+    if !track.albums.is_empty() {
+        tag.insert_text(ItemKey::AlbumTitle, album_title);
+    }
     tag.insert_text(ItemKey::TrackTitle, track_title);
-    tag.insert_text(ItemKey::AlbumTitle, album_title);
 
     match container {
         Container::Mp4 => {
@@ -223,7 +248,7 @@ pub fn set_tags(
     }
 
     if container == Container::Mp4 || container == Container::Flac {
-        tag.insert_text(ItemKey::Comment, track_url.clone());
+        tag.insert_text(ItemKey::Comment, track_url.to_string());
     }
 
     tag.save_to_path(path, WriteOptions::default())
@@ -237,7 +262,7 @@ pub fn set_tags(
                 log::warn!("Не удалось добавить кадр TDRC: {error:#}");
             }
         }
-        if let Err(error) = add_id3v2_url_frame(path, "WOAF", &track_url) {
+        if let Err(error) = add_id3v2_url_frame(path, "WOAF", track_url) {
             log::warn!("Не удалось добавить кадр WOAF: {error:#}");
         }
     }

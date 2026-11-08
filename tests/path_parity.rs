@@ -1,8 +1,8 @@
 use std::path::Path;
 
+use music_downloader::models::Track;
+use music_downloader::path_pattern::prepare_base_path;
 use serde::Deserialize;
-use yandex_music_downloader::models::Track;
-use yandex_music_downloader::path_pattern::prepare_base_path;
 
 #[derive(Deserialize)]
 struct Case {
@@ -14,7 +14,7 @@ struct Case {
     expected: String,
 }
 
-/// Эталонные значения получены запуском Python-версии (`ymd.core.prepare_base_path`).
+/// Эталонные значения получены запуском прежней Python-версии.
 #[test]
 fn path_parity_with_python() {
     let cases: Vec<Case> =

@@ -3,10 +3,10 @@ use std::path::{Path, PathBuf};
 use lofty::file::TaggedFileExt;
 use lofty::picture::PictureType;
 use lofty::tag::{ItemKey, Tag};
-use yandex_music_downloader::api::Container;
-use yandex_music_downloader::mime::MimeType;
-use yandex_music_downloader::models::Track;
-use yandex_music_downloader::tagging::{set_tags, AlbumCover};
+use music_downloader::api::Container;
+use music_downloader::mime::MimeType;
+use music_downloader::models::Track;
+use music_downloader::tagging::{set_tags, AlbumCover};
 
 const TRACK_JSON: &str = r#"{
     "id": 777,

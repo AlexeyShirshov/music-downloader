@@ -1,6 +1,6 @@
-use yandex_music_downloader::api::{decrypt_data, file_info_sign_at, lyrics_sign_at};
-use yandex_music_downloader::mime::{guess_mime_type, MimeType};
-use yandex_music_downloader::path_pattern::truncate_to_byte_length;
+use music_downloader::api::{decrypt_data, file_info_sign_at, lyrics_sign_at};
+use music_downloader::mime::{guess_mime_type, MimeType};
+use music_downloader::path_pattern::truncate_to_byte_length;
 
 /// Эталоны посчитаны Python-версией (hmac/hashlib/base64 и pycryptodome).
 #[test]

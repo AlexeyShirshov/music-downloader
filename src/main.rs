@@ -11,15 +11,18 @@ use clap::{ArgGroup, Parser, ValueEnum};
 use regex::Regex;
 use sha2::{Digest, Sha256};
 
-use yandex_music_downloader::api::{self, Container, CustomDownloadInfo};
-use yandex_music_downloader::client::Client;
-use yandex_music_downloader::mime::guess_mime_type;
-use yandex_music_downloader::models::{Album, Track};
-use yandex_music_downloader::path_pattern::{prepare_base_path, DEFAULT_PATH_PATTERN};
-use yandex_music_downloader::tagging::{set_tags, AlbumCover};
+use music_downloader::api::{self, Container, CustomDownloadInfo};
+use music_downloader::client::Client;
+use music_downloader::mime::guess_mime_type;
+use music_downloader::models::{Album, Track};
+use music_downloader::path_pattern::{
+    prepare_base_path, DEFAULT_PATH_PATTERN, DEFAULT_VK_PATH_PATTERN,
+};
+use music_downloader::tagging::{set_tags, set_tags_with_url, AlbumCover};
+use music_downloader::vk::{self, AudioId};
 
 const AUDIO_FILE_SUFFIXES: [&str; 3] = [".mp3", ".flac", ".m4a"];
-const TEMPORARY_FILE_NAME_TEMPLATE: &str = ".yandex-music-downloader.{}.tmp";
+const TEMPORARY_FILE_NAME_TEMPLATE: &str = ".music-downloader.{}.tmp";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 enum LyricsFormat {
@@ -68,8 +71,9 @@ fn cover_resolution_arg(value: &str) -> Result<i64, String> {
 
 #[derive(Parser, Debug)]
 #[command(
-    name = "ymd",
-    about = "Загрузчик музыки с сервиса Яндекс.Музыка",
+    name = "music-downloader",
+    version,
+    about = "Загрузчик музыки с сервисов Яндекс.Музыка и VK",
     group(ArgGroup::new("id").multiple(false).args([
         "artist_id", "album_id", "track_id", "playlist_id", "url"
     ]))
@@ -235,10 +239,9 @@ struct Args {
         long,
         help_heading = "Указание пути",
         value_name = "Паттерн",
-        default_value = DEFAULT_PATH_PATTERN,
-        help = "Поддерживает следующие заполнители: #number, #track-artist, #album-artist, #title, #album, #year, #artist-id, #album-id, #track-id, #number-padded, #disc-number, #disc-number-padded (по умолчанию: #album-artist/#album/#number - #title)"
+        help = "Поддерживает следующие заполнители: #number, #track-artist, #album-artist, #title, #album, #year, #artist-id, #album-id, #track-id, #number-padded, #disc-number, #disc-number-padded (по умолчанию: #album-artist/#album/#number - #title; для VK — #track-artist/#title)"
     )]
-    path_pattern: PathBuf,
+    path_pattern: Option<PathBuf>,
 
     #[arg(
         value_name = "URL",
@@ -250,9 +253,17 @@ struct Args {
         long,
         help_heading = "Авторизация",
         value_name = "Токен",
-        help = "Токен для авторизации. Если не указан, используется сохранённый токен или запускается OAuth Device Flow"
+        help = "Токен Яндекс.Музыки. Если не указан, используется сохранённый токен или запускается OAuth Device Flow"
     )]
     token: Option<String>,
+
+    #[arg(
+        long,
+        help_heading = "Авторизация",
+        value_name = "Токен VK",
+        help = "Токен Kate Mobile для ссылок vk.com/vk.ru. Если не указан, читается из MUSIC_DOWNLOADER_VK_TOKEN или сохранённого файла"
+    )]
+    vk_token: Option<String>,
 }
 
 struct DownloadableTrack {
@@ -336,7 +347,7 @@ fn save_token(token: &str) {
 }
 
 fn token_path() -> Option<PathBuf> {
-    if let Ok(path) = std::env::var("YMD_TOKEN_FILE") {
+    if let Ok(path) = std::env::var("MUSIC_DOWNLOADER_TOKEN_FILE") {
         if !path.is_empty() {
             return Some(PathBuf::from(path));
         }
@@ -365,7 +376,7 @@ fn token_path() -> Option<PathBuf> {
         }
     });
 
-    base.map(|path| path.join("ymd").join("token"))
+    base.map(|path| path.join("music-downloader").join("token"))
 }
 
 fn run(mut args: Args) -> Result<()> {
@@ -390,6 +401,9 @@ fn run(mut args: Args) -> Result<()> {
     }
 
     if let Some(url) = args.url.clone() {
+        if let Some(audio_id) = vk::parse_audio_link(&url) {
+            return run_vk(args, audio_id);
+        }
         resolve_url(&mut args, &url)?;
     }
 
@@ -418,6 +432,9 @@ fn run(mut args: Args) -> Result<()> {
 
     api::account_status(&client)?;
 
+    args.path_pattern
+        .get_or_insert_with(|| PathBuf::from(DEFAULT_PATH_PATTERN));
+
     let mut downloader = Downloader {
         args,
         client,
@@ -427,6 +444,154 @@ fn run(mut args: Args) -> Result<()> {
         progress_status: String::new(),
     };
     downloader.run()
+}
+
+fn run_vk(args: Args, audio_id: AudioId) -> Result<()> {
+    if args.lyrics_format != LyricsFormat::None {
+        println!("Тексты песен для VK не поддерживаются, флаг --lyrics-format игнорируется");
+    }
+
+    let token = resolve_vk_token(&args)?;
+    let client = vk::VkClient::new(
+        token,
+        args.timeout,
+        u32::try_from(args.tries).unwrap_or(u32::MAX),
+        args.retry_delay,
+    );
+
+    let audio = client
+        .get_by_id(audio_id)
+        .map_err(|error| anyhow!("{error}"))?;
+    let download_url = audio.download_url()?;
+    let track = audio.to_track(audio_id);
+
+    let pattern = args
+        .path_pattern
+        .as_deref()
+        .unwrap_or_else(|| Path::new(DEFAULT_VK_PATH_PATTERN));
+    let base_path = args
+        .dir
+        .join(prepare_base_path(pattern, &track, args.unsafe_path));
+
+    if args.skip_existing && existing_file(&base_path) {
+        return Ok(());
+    }
+
+    let mut target = base_path.as_os_str().to_os_string();
+    target.push(".mp3");
+    let target_path = PathBuf::from(target);
+
+    if let Some(parent) = target_path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    {
+        if !parent.is_dir() {
+            std::fs::create_dir_all(parent)
+                .with_context(|| format!("Не удалось создать папку {}", parent.display()))?;
+        }
+    }
+
+    println!("[1/1] [MP3] Загружается {}", target_path.display());
+    let data = client
+        .download(&download_url)
+        .map_err(|error| anyhow!("{error}"))?;
+
+    let source_url = vk::track_url(audio_id);
+    let compatibility_level = i64::from(args.compatibility_level);
+    write_via_temporary_file(
+        &data,
+        &target_path,
+        Some(&|temporary_path: &Path| {
+            set_tags_with_url(
+                temporary_path,
+                &track,
+                Container::Mp3,
+                None,
+                None,
+                compatibility_level,
+                &source_url,
+            )
+        }),
+    )?;
+
+    Ok(())
+}
+
+fn resolve_vk_token(args: &Args) -> Result<String> {
+    if let Some(token) = args
+        .vk_token
+        .as_deref()
+        .map(str::trim)
+        .filter(|token| !token.is_empty())
+    {
+        save_vk_token(token);
+        return Ok(token.to_string());
+    }
+
+    if let Ok(value) = std::env::var("MUSIC_DOWNLOADER_VK_TOKEN") {
+        let value = value.trim();
+        if !value.is_empty() {
+            return Ok(value.to_string());
+        }
+    }
+
+    if let Some(token) = load_saved_vk_token() {
+        println!("Используется сохранённый VK-токен");
+        return Ok(token);
+    }
+
+    let location = vk_token_path()
+        .map(|path| path.display().to_string())
+        .unwrap_or_else(|| "~/.config/music-downloader/vk_token".to_string());
+    bail!(
+        "Для VK нужен токен Kate Mobile. Получите его на https://vkhost.github.io (Kate Mobile), \
+         затем передайте через --vk-token, переменную окружения MUSIC_DOWNLOADER_VK_TOKEN или сохраните в {location}"
+    )
+}
+
+fn load_saved_vk_token() -> Option<String> {
+    let token = std::fs::read_to_string(vk_token_path()?).ok()?;
+    let token = token.trim().to_string();
+    (!token.is_empty()).then_some(token)
+}
+
+fn save_vk_token(token: &str) {
+    let Some(path) = vk_token_path() else {
+        return;
+    };
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    match write_secret(&path, token) {
+        Ok(()) => println!("VK-токен сохранён в {}", path.display()),
+        Err(error) => eprintln!(
+            "Не удалось сохранить VK-токен в {}: {error}",
+            path.display()
+        ),
+    }
+}
+
+fn vk_token_path() -> Option<PathBuf> {
+    if let Ok(path) = std::env::var("MUSIC_DOWNLOADER_VK_TOKEN_FILE") {
+        if !path.is_empty() {
+            return Some(PathBuf::from(path));
+        }
+    }
+    token_path().map(|path| path.with_file_name("vk_token"))
+}
+
+fn write_secret(path: &Path, contents: &str) -> std::io::Result<()> {
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        options.mode(0o600);
+    }
+
+    let mut file = options.open(path)?;
+    file.write_all(contents.as_bytes())
 }
 
 fn resolve_url(args: &mut Args, url: &str) -> Result<()> {
@@ -619,11 +784,15 @@ impl Downloader {
             return Ok(());
         }
 
-        let save_path = self.args.dir.join(prepare_base_path(
-            &self.args.path_pattern,
-            &track,
-            self.args.unsafe_path,
-        ));
+        let pattern = self
+            .args
+            .path_pattern
+            .as_deref()
+            .unwrap_or_else(|| Path::new(DEFAULT_PATH_PATTERN));
+        let save_path =
+            self.args
+                .dir
+                .join(prepare_base_path(pattern, &track, self.args.unsafe_path));
 
         if self.args.skip_existing && existing_file(&save_path) {
             return Ok(());
