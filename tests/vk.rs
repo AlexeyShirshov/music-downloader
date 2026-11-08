@@ -1,5 +1,6 @@
 use music_downloader::vk::{
-    extract_access_token, extract_vk_cookies, mp3_url, parse_audio_link, AudioId, VkAudio, VkUser,
+    extract_access_token, extract_vk_cookies, mp3_url, parse_audio_link, parse_web_token, AudioId,
+    VkAudio, VkUser,
 };
 
 #[test]
@@ -144,7 +145,7 @@ fn reads_cookies_from_header() {
     assert_eq!(cookies, "p=abc123; remixsid=def456");
 
     let cookies = extract_vk_cookies("Cookie: p=\"abc\"; YandexBrowser=1; remixsid=def").unwrap();
-    assert_eq!(cookies, "p=abc; remixsid=def");
+    assert_eq!(cookies, "p=abc; YandexBrowser=1; remixsid=def");
 }
 
 #[test]
@@ -163,11 +164,43 @@ fn reads_cookies_from_json_export() {
 }
 
 #[test]
-fn reports_missing_cookies() {
+fn accepts_any_session_cookie_without_p() {
+    assert_eq!(
+        extract_vk_cookies("remixnsid=def").unwrap(),
+        "remixnsid=def"
+    );
+    assert_eq!(
+        extract_vk_cookies("remixsid=def; remixdsid=ghi").unwrap(),
+        "remixsid=def; remixdsid=ghi"
+    );
+}
+
+#[test]
+fn filters_cookies_of_other_sites() {
+    let text = ".example.com\tTRUE\t/\tTRUE\t1800000000\tsessionid\tsecret\n\
+        .vk.ru\tTRUE\t/\tTRUE\t1800000000\tremixsid\tdef\n";
+    assert_eq!(extract_vk_cookies(text).unwrap(), "remixsid=def");
+}
+
+#[test]
+fn reports_missing_session_cookie() {
     let error = extract_vk_cookies("p=abc").unwrap_err().to_string();
     assert!(error.contains("remixsid"), "{error}");
-    let error = extract_vk_cookies("foo=bar; remixsid=def")
+    let error = extract_vk_cookies("foo=bar").unwrap_err().to_string();
+    assert!(error.contains("Cookie"), "{error}");
+}
+
+#[test]
+fn parses_web_token_response() {
+    let token = parse_web_token(
+        br#"{"type":"okay","data":{"access_token":"vk1.a.TEST","expires":1784473661}}"#,
+    )
+    .unwrap();
+    assert_eq!(token.access_token, "vk1.a.TEST");
+    assert_eq!(token.expires, 1784473661);
+
+    let error = parse_web_token(br#"{"type":"error","error_info":"unauthorized"}"#)
         .unwrap_err()
         .to_string();
-    assert!(error.contains("p"), "{error}");
+    assert!(error.contains("unauthorized"), "{error}");
 }

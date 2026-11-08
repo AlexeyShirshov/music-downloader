@@ -98,7 +98,7 @@ cargo build --release --target x86_64-pc-windows-msvc
 С сентября 2026 VK закрыл доступ сторонним приложениям: токены Kate Mobile и
 vkhost больше не выдаются, а выданные раньше перестали работать. Единственный
 рабочий способ — войти как **веб-клиент VK**: программа обменивает куки вашего
-браузера (`p` и `remixsid`) на токен веб-клиента и сохраняет его.
+браузера (`remixsid` и остальные) на токен веб-клиента и сохраняет его.
 
 Самый простой способ — `--vk-login`:
 
@@ -109,11 +109,33 @@ music-downloader --vk-login "https://vk.com/audio-2001370911_36370911"
 ```
 
 1. Войдите в VK в браузере — программа откроет <https://vk.ru/>.
-2. Откройте DevTools (F12) → **Application** → **Storage** → **Cookies** →
-   `https://vk.ru`.
-3. Скопируйте значения кук `p` и `remixsid` и вставьте строкой
-   `p=...; remixsid=...`. Вместо строки можно указать путь к
-   экспортированному `cookies.txt` (Netscape) или JSON-экспорту расширения.
+2. Нажмите **F12** → вкладка **Network** (Сеть) → обновите страницу (**F5**).
+3. Выберите любой запрос к `vk.ru` — обычно самый верхний в списке.
+4. Справа откройте **Headers** → **Request Headers** → строку **Cookie**.
+5. Скопируйте значение `Cookie` целиком: правый клик по строке →
+   **Copy value** (или выделите текст и нажмите `Ctrl+C`).
+6. Вернитесь в окно программы, вставьте скопированное (правый клик или
+   `Ctrl+V`) и нажмите **Enter**.
+
+В строке `Cookie` есть `remixsid` (или `remixnsid`/`remixdsid`) — именно она
+подтверждает вход. Вместо неё можно указать путь к экспортированному
+`cookies.txt` (Netscape) или JSON-экспорту расширения — куки других сайтов
+отфильтруются.
+
+Если обмен кук не проходит, токен можно получить прямо в браузере: откройте
+консоль (Console) на `vk.ru` и выполните
+
+```js
+fetch('https://login.vk.ru/?act=web_token', {
+  method: 'POST',
+  headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+  body: 'version=1&app_id=6287487',
+  credentials: 'include'
+}).then(r => r.json()).then(d => console.log(d.data.access_token))
+```
+
+и вставьте полученный `vk1.a...` в `--vk-login` (он принимает и готовый токен)
+или в `--vk-token`.
 
 Если токена ещё нет, вход запускается сам при первом скачивании трека VK:
 `--vk-login` не обязателен, флаг нужен, чтобы войти заранее или обновить токен.
@@ -123,24 +145,27 @@ music-downloader --vk-login "https://vk.com/audio-2001370911_36370911"
 Куки можно передать и без интерактива:
 
 ```bash
-music-downloader --vk-cookies "p=...; remixsid=..." \
+music-downloader --vk-cookies "remixsid=...; remixnsid=..." \
   "https://vk.ru/audio-2001370911_36370911"
 # файл cookies.txt (Netscape) или JSON-экспорт
 music-downloader --vk-cookies cookies.txt "https://vk.ru/audio-2001370911_36370911"
 # из stdin, чтобы не оставлять куки в истории shell
-echo "p=...; remixsid=..." | music-downloader --vk-cookies - \
+echo "remixsid=..." | music-downloader --vk-cookies - \
   "https://vk.ru/audio-2001370911_36370911"
 ```
 
 Переменная `MUSIC_DOWNLOADER_VK_COOKIES` задаёт те же куки, что и
 `--vk-cookies`.
 
-Токен веб-клиента действует несколько недель и сохраняется в
-`~/.config/music-downloader/vk_token` (на Windows —
-`%APPDATA%\music-downloader\vk_token`, файл создаётся с правами `600`).
-Готовый токен можно передать через `--vk-token` или
-`MUSIC_DOWNLOADER_VK_TOKEN`; путь к файлу переопределяет
-`MUSIC_DOWNLOADER_VK_TOKEN_FILE`. Сами куки нигде не сохраняются.
+Веб-токен живёт всего ~15 минут, поэтому сохраняются не он, а куки:
+`~/.config/music-downloader/vk_cookies` (на Windows —
+`%APPDATA%\music-downloader\vk_cookies`, файл создаётся с правами `600`).
+При каждом запуске из них минтится свежий токен, так что повторный вход нужен
+только когда истекут сами куки. Путь переопределяет
+`MUSIC_DOWNLOADER_VK_COOKIES_FILE`.
+
+Готовый токен всё ещё можно передать через `--vk-token` или
+`MUSIC_DOWNLOADER_VK_TOKEN` — но он проживёт всего ~15 минут.
 
 Скачивание: `audio.getById` теперь отдаёт HLS-плейлист. Программа сама
 собирает сегменты, расшифровывает AES-128-CBC (ключ и IV из плейлиста) и
@@ -286,9 +311,9 @@ music-downloader --token "<Токен>" \
 | Переменная | Назначение |
 | --- | --- |
 | `MUSIC_DOWNLOADER_TOKEN_FILE` | Путь к файлу токена Яндекс.Музыки. |
-| `MUSIC_DOWNLOADER_VK_COOKIES` | Куки браузера VK (`p=...; remixsid=...`) или путь к `cookies.txt`. |
-| `MUSIC_DOWNLOADER_VK_TOKEN` | Готовый токен веб-клиента VK. |
-| `MUSIC_DOWNLOADER_VK_TOKEN_FILE` | Путь к файлу токена VK. |
+| `MUSIC_DOWNLOADER_VK_COOKIES` | Строка Cookie из браузера целиком или путь к `cookies.txt`. |
+| `MUSIC_DOWNLOADER_VK_TOKEN` | Готовый токен веб-клиента VK (живёт ~15 минут). |
+| `MUSIC_DOWNLOADER_VK_COOKIES_FILE` | Путь к файлу с куками VK. |
 | `MUSIC_DOWNLOADER_API_BASE_URL` | Базовый URL API Яндекс.Музыки (для отладки и тестов). |
 | `MUSIC_DOWNLOADER_COVER_BASE_URL` | Базовый URL обложек. |
 | `MUSIC_DOWNLOADER_VK_API_BASE_URL` | Базовый URL VK API. |
@@ -385,7 +410,7 @@ cargo deny check
 ```bash
 mkdir -p ~/.config/music-downloader
 mv ~/.config/ymd/token ~/.config/music-downloader/token 2>/dev/null || true
-mv ~/.config/ymd/vk_token ~/.config/music-downloader/vk_token 2>/dev/null || true
+mv ~/.config/ymd/vk_token ~/.config/music-downloader/vk_cookies 2>/dev/null || true
 ```
 
 ## Благодарности

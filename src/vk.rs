@@ -8,7 +8,6 @@
 //! `audio.getById` теперь отдаёт HLS-плейлист; его сегменты собираются и
 //! расшифровываются в [`crate::hls`].
 
-use std::collections::HashMap;
 use std::sync::OnceLock;
 use std::time::Duration;
 
@@ -130,49 +129,114 @@ pub struct WebToken {
     pub expires: i64,
 }
 
-/// Обменивает куки браузера (`p` и `remixsid`) на токен веб-клиента.
+/// Обменивает куки браузера (`remixsid`) на токен веб-клиента.
 pub fn web_token(cookies: &str, timeout_secs: u64) -> ApiResult<WebToken> {
-    let base = std::env::var("MUSIC_DOWNLOADER_VK_LOGIN_BASE_URL")
+    let override_base = std::env::var("MUSIC_DOWNLOADER_VK_LOGIN_BASE_URL")
         .ok()
-        .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| VK_WEB_LOGIN_BASE.to_string());
-    let url = format!("{}/?act=web_token", base.trim_end_matches('/'));
+        .filter(|value| !value.is_empty());
+    let hosts: &[(&str, &str)] = match override_base.as_deref() {
+        Some(_) => &[("", "https://vk.ru")],
+        None => &[
+            ("https://login.vk.ru", "https://vk.ru"),
+            ("https://login.vk.com", "https://vk.com"),
+        ],
+    };
     let agent = http_agent(timeout_secs);
+    let mut last_error = None;
 
-    log::debug!("VK web_token {}", url);
-    let response = agent
-        .post(&url)
-        .header("User-Agent", VK_WEB_USER_AGENT)
-        .header("Origin", "https://vk.ru")
-        .header("Referer", "https://vk.ru/")
-        .header("Cookie", cookies)
-        .send_form([("version", "1"), ("app_id", VK_WEB_CLIENT_ID)])
-        .map_err(|error| ApiError::Network(format!("Не удалось получить токен VK: {error}")))?;
+    for (base, origin) in hosts {
+        let base = if base.is_empty() {
+            override_base.as_deref().unwrap_or(VK_WEB_LOGIN_BASE)
+        } else {
+            base
+        };
+        let url = format!("{}/?act=web_token", base.trim_end_matches('/'));
 
-    let status = response.status().as_u16();
-    let body = response
-        .into_body()
-        .with_config()
-        .limit(1024 * 1024)
-        .read_to_vec()
-        .map_err(|error| ApiError::Network(format!("Не удалось прочитать ответ VK: {error}")))?;
-    if !(200..300).contains(&status) {
-        return Err(ApiError::Fatal(format!("VK не выдал токен: HTTP {status}")));
+        // POST — основной вариант; GET с параметрами в строке VK тоже
+        // принимает на части сессий.
+        for use_post in [true, false] {
+            log::debug!(
+                "VK web_token {} ({})",
+                url,
+                if use_post { "POST" } else { "GET" }
+            );
+            let get_url = format!("{url}&version=1&app_id={VK_WEB_CLIENT_ID}");
+            let response = if use_post {
+                agent
+                    .post(&url)
+                    .header("User-Agent", VK_WEB_USER_AGENT)
+                    .header("Accept", "*/*")
+                    .header("Origin", *origin)
+                    .header("Referer", format!("{origin}/"))
+                    .header("Cookie", cookies)
+                    .send_form([("version", "1"), ("app_id", VK_WEB_CLIENT_ID)])
+            } else {
+                agent
+                    .get(&get_url)
+                    .header("User-Agent", VK_WEB_USER_AGENT)
+                    .header("Accept", "*/*")
+                    .header("Origin", *origin)
+                    .header("Referer", format!("{origin}/"))
+                    .header("Cookie", cookies)
+                    .call()
+            };
+            let response = match response {
+                Ok(response) => response,
+                Err(error) => {
+                    last_error = Some(ApiError::Network(format!(
+                        "Не удалось получить токен VK: {error}"
+                    )));
+                    continue;
+                }
+            };
+
+            let status = response.status().as_u16();
+            let body = match response
+                .into_body()
+                .with_config()
+                .limit(1024 * 1024)
+                .read_to_vec()
+            {
+                Ok(body) => body,
+                Err(error) => {
+                    last_error = Some(ApiError::Network(format!(
+                        "Не удалось прочитать ответ VK: {error}"
+                    )));
+                    continue;
+                }
+            };
+            if !(200..300).contains(&status) {
+                last_error = Some(ApiError::Fatal(format!("VK не выдал токен: HTTP {status}")));
+                continue;
+            }
+
+            match parse_web_token(&body) {
+                Ok(token) => return Ok(token),
+                Err(error) => last_error = Some(error),
+            }
+        }
     }
 
-    let value: Value = serde_json::from_slice(&body)
+    Err(last_error.unwrap_or_else(|| ApiError::Fatal("VK не выдал токен".to_string())))
+}
+
+/// Разбирает ответ `login.vk.ru/?act=web_token`.
+pub fn parse_web_token(body: &[u8]) -> ApiResult<WebToken> {
+    let value: Value = serde_json::from_slice(body)
         .map_err(|error| ApiError::Fatal(format!("Некорректный ответ VK: {error}")))?;
     let kind = value
         .get("type")
         .and_then(Value::as_str)
         .unwrap_or_default();
-    if kind != "ok" {
+    // VK отвечает `okay` на успех и `error` на отказ.
+    if kind != "okay" && kind != "ok" {
         let info = value
             .get("error_info")
             .and_then(Value::as_str)
             .unwrap_or("неизвестная ошибка");
         return Err(ApiError::Fatal(format!(
-            "VK не выдал токен: {info}. Проверьте, что куки p и remixsid скопированы из вошедшего браузера"
+            "VK не выдал токен: {info}. Куки могли истечь или быть скопированы не из того \
+             браузера; тогда получите токен в консоли браузера (--vk-login покажет как)"
         )));
     }
 
@@ -193,15 +257,16 @@ pub fn web_token(cookies: &str, timeout_secs: u64) -> ApiResult<WebToken> {
     })
 }
 
-/// Достаёт куки `p` и `remixsid` из заголовка `Cookie`, файла cookies.txt
-/// (Netscape) или JSON-экспорта расширения.
+/// Достаёт куки VK из заголовка `Cookie`, файла cookies.txt (Netscape) или
+/// JSON-экспорта расширения. Куки передаются целиком: VK заводит не только
+/// `remixsid`, но и `remixnsid`/`remixdsid`, а лишние куки ему не мешают.
 pub fn extract_vk_cookies(input: &str) -> Result<String> {
     let text = input.trim();
     if text.is_empty() {
-        bail!("Пустой ввод: нужны куки p и remixsid");
+        bail!("Пустой ввод: нужны куки сессии VK");
     }
 
-    let mut cookies: HashMap<String, String> = HashMap::new();
+    let mut cookies: Vec<(String, String)> = Vec::new();
 
     if text.starts_with('[') || text.starts_with('{') {
         collect_json_cookies(text, &mut cookies)?;
@@ -211,28 +276,51 @@ pub fn extract_vk_cookies(input: &str) -> Result<String> {
         collect_header_cookies(text, &mut cookies);
     }
 
-    let p = cookies
-        .get("p")
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| {
-            anyhow::anyhow!(
-                "Не нашёл куку p. Скопируйте её из DevTools: Application → Cookies → https://vk.ru"
-            )
-        })?;
-    let remixsid = cookies
-        .get("remixsid")
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| {
-            anyhow::anyhow!(
-                "Не нашёл куку remixsid. Скопируйте её из DevTools: Application → Cookies → https://vk.ru"
-            )
-        })?;
+    if !cookies
+        .iter()
+        .any(|(name, value)| is_session_cookie(name) && !value.is_empty())
+    {
+        bail!(
+            "Не нашёл куку сессии VK (remixsid). Скопируйте строку Cookie целиком из DevTools: \
+             Network → любой запрос к vk.ru → Request Headers → Cookie"
+        );
+    }
 
-    Ok(format!("p={p}; remixsid={remixsid}"))
+    Ok(cookies
+        .into_iter()
+        .map(|(name, value)| format!("{name}={value}"))
+        .collect::<Vec<_>>()
+        .join("; "))
 }
 
-fn collect_header_cookies(text: &str, cookies: &mut HashMap<String, String>) {
-    // Допускаем вставку целой строки `Cookie: p=...; remixsid=...`.
+/// Куки, которыми VK подтверждает вход.
+fn is_session_cookie(name: &str) -> bool {
+    matches!(name, "remixsid" | "remixnsid" | "remixdsid")
+}
+
+fn is_vk_domain(domain: &str) -> bool {
+    let domain = domain.trim().trim_start_matches('.');
+    domain == "vk.ru"
+        || domain.ends_with(".vk.ru")
+        || domain == "vk.com"
+        || domain.ends_with(".vk.com")
+}
+
+fn push_cookie(cookies: &mut Vec<(String, String)>, name: &str, value: &str) {
+    let name = name.trim();
+    let value = value.trim().trim_matches('"');
+    if name.is_empty() || value.is_empty() {
+        return;
+    }
+    if let Some(slot) = cookies.iter_mut().find(|(existing, _)| existing == name) {
+        slot.1 = value.to_string();
+    } else {
+        cookies.push((name.to_string(), value.to_string()));
+    }
+}
+
+fn collect_header_cookies(text: &str, cookies: &mut Vec<(String, String)>) {
+    // Допускаем вставку целой строки `Cookie: ...` и даже `Set-Cookie`.
     let text = text
         .strip_prefix("Cookie:")
         .or_else(|| text.strip_prefix("cookie:"))
@@ -241,28 +329,31 @@ fn collect_header_cookies(text: &str, cookies: &mut HashMap<String, String>) {
         let Some((name, value)) = item.split_once('=') else {
             continue;
         };
-        let name = name.trim();
-        let value = value.trim().trim_matches('"');
-        if !name.is_empty() && !value.is_empty() {
-            cookies.insert(name.to_string(), value.to_string());
+        // Атрибуты Set-Cookie — не куки.
+        if matches!(
+            name.trim().to_ascii_lowercase().as_str(),
+            "path" | "domain" | "expires" | "max-age" | "samesite" | "priority"
+        ) {
+            continue;
         }
+        push_cookie(cookies, name, value);
     }
 }
 
-fn collect_netscape_cookies(text: &str, cookies: &mut HashMap<String, String>) {
+fn collect_netscape_cookies(text: &str, cookies: &mut Vec<(String, String)>) {
     for line in text.lines() {
         let line = line.trim();
         if line.is_empty() || line.starts_with('#') {
             continue;
         }
         let fields: Vec<&str> = line.split('\t').collect();
-        if fields.len() >= 7 {
-            cookies.insert(fields[5].trim().to_string(), fields[6].trim().to_string());
+        if fields.len() >= 7 && is_vk_domain(fields[0]) {
+            push_cookie(cookies, fields[5], fields[6]);
         }
     }
 }
 
-fn collect_json_cookies(text: &str, cookies: &mut HashMap<String, String>) -> Result<()> {
+fn collect_json_cookies(text: &str, cookies: &mut Vec<(String, String)>) -> Result<()> {
     let value: Value = serde_json::from_str(text)
         .map_err(|error| anyhow::anyhow!("Некорректный JSON с куками: {error}"))?;
     match value {
@@ -274,13 +365,16 @@ fn collect_json_cookies(text: &str, cookies: &mut HashMap<String, String>) -> Re
                 let Some(value) = item.get("value").and_then(Value::as_str) else {
                     continue;
                 };
-                cookies.insert(name.to_string(), value.to_string());
+                let domain = item.get("domain").and_then(Value::as_str).unwrap_or("");
+                if domain.is_empty() || is_vk_domain(domain) {
+                    push_cookie(cookies, name, value);
+                }
             }
         }
         Value::Object(map) => {
             for (name, value) in map {
                 if let Some(value) = value.as_str() {
-                    cookies.insert(name, value.to_string());
+                    push_cookie(cookies, &name, value);
                 }
             }
         }

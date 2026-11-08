@@ -262,7 +262,7 @@ struct Args {
         long,
         help_heading = "Авторизация",
         value_name = "Куки VK",
-        help = "Куки браузера VK (p=...; remixsid=...) или путь к cookies.txt. Значение `-` читает куки из stdin"
+        help = "Строка Cookie из браузера целиком (там remixsid) или путь к cookies.txt. Значение `-` читает куки из stdin"
     )]
     vk_cookies: Option<String>,
 
@@ -271,7 +271,7 @@ struct Args {
         help_heading = "Авторизация",
         value_name = "Токен VK",
         conflicts_with = "vk_cookies",
-        help = "Готовый токен веб-клиента VK. Обычно не нужен: проще передать куки через --vk-cookies. Значение `-` читает токен из stdin"
+        help = "Готовый токен веб-клиента VK (живёт ~15 минут). Обычно не нужен: проще передать куки через --vk-cookies. Значение `-` читает токен из stdin"
     )]
     vk_token: Option<String>,
 
@@ -626,7 +626,7 @@ fn resolve_vk_token(args: &Args) -> Result<String> {
         } else {
             raw.to_string()
         };
-        return vk_login_with_cookies(args, &raw);
+        return vk_login_with_cookies(args, &raw, true);
     }
 
     if let Some(raw) = args
@@ -643,28 +643,29 @@ fn resolve_vk_token(args: &Args) -> Result<String> {
         let token = vk::extract_access_token(&raw).ok_or_else(|| {
             anyhow!("Не удалось разобрать VK-токен: ожидается access_token или URL с ним")
         })?;
-        save_vk_token(&token);
-        return Ok(token);
+        return verify_vk_token(args, &token);
     }
 
     if let Ok(value) = std::env::var("MUSIC_DOWNLOADER_VK_TOKEN") {
         let value = value.trim();
         if !value.is_empty() {
             let token = vk::extract_access_token(value).unwrap_or_else(|| value.to_string());
-            return Ok(token);
+            return verify_vk_token(args, &token);
         }
     }
 
     if let Ok(value) = std::env::var("MUSIC_DOWNLOADER_VK_COOKIES") {
         let value = value.trim();
         if !value.is_empty() {
-            return vk_login_with_cookies(args, value);
+            return vk_login_with_cookies(args, value, true);
         }
     }
 
-    if let Some(token) = load_saved_vk_token() {
-        println!("Используется сохранённый VK-токен");
-        return Ok(token);
+    // Веб-токен живёт ~15 минут, поэтому храним не его, а куки: на каждом
+    // запуске из них минтится свежий токен.
+    if let Some(cookies) = load_saved_vk_cookies() {
+        println!("Используются сохранённые куки VK");
+        return vk_login_with_cookies(args, &cookies, false);
     }
 
     // Токена нет: если можем спросить пользователя, сразу запускаем тот же
@@ -677,13 +678,13 @@ fn resolve_vk_token(args: &Args) -> Result<String> {
         return vk_login(args);
     }
 
-    let location = vk_token_path()
+    let location = vk_cookies_path()
         .map(|path| path.display().to_string())
-        .unwrap_or_else(|| "~/.config/music-downloader/vk_token".to_string());
+        .unwrap_or_else(|| "~/.config/music-downloader/vk_cookies".to_string());
     bail!(
         "Для VK нужен доступ к аккаунту. Запустите с --vk-login (или --vk-cookies), чтобы \
-         обменять куки браузера на токен и сохранить его в {location}. Готовый токен можно \
-         передать через --vk-token или MUSIC_DOWNLOADER_VK_TOKEN"
+         сохранить куки браузера в {location} и получить по ним токен. Готовый токен живёт \
+         всего ~15 минут и передаётся через --vk-token или MUSIC_DOWNLOADER_VK_TOKEN"
     )
 }
 
@@ -694,30 +695,52 @@ const VK_LOGIN_PAGE: &str = "https://vk.ru/";
 ///
 /// VK закрыл доступ сторонним приложениям (Kate Mobile, vkhost) в сентябре
 /// 2026, поэтому OAuth-токен больше не получить. Зато токен веб-клиента
-/// выдаётся по кукам `p` и `remixsid` вошедшего браузера — их и просим.
+/// выдаётся по кукам вошедшего браузера (`remixsid`), а если обмен не
+/// проходит — его можно получить прямо в консоли браузера.
 fn vk_login(args: &Args) -> Result<String> {
     println!(
         "VK закрыл доступ сторонним приложениям, поэтому токен Kate Mobile больше не работает."
     );
-    println!("Вход теперь идёт через куки вашего браузера:");
+    println!("Вход идёт через куки вашего браузера:");
     println!();
     println!("1. Войдите в VK: {VK_LOGIN_PAGE}");
-    println!("2. Откройте DevTools (F12) → Application → Storage → Cookies → {VK_LOGIN_PAGE}");
-    println!("3. Скопируйте значения кук p и remixsid или экспортируйте cookies.txt.");
+    println!("2. Нажмите F12 → вкладка Network (Сеть) → обновите страницу (F5)");
+    println!("3. Выберите любой запрос к vk.ru (обычно самый верхний)");
+    println!("4. Справа: Headers → Request Headers → строка Cookie");
+    println!("5. Скопируйте значение Cookie целиком (правый клик → Copy value)");
+    println!("6. Вставьте сюда (правый клик или Ctrl+V) и нажмите Enter");
+    println!();
+    println!("Если так не получается, откройте в браузере консоль (Console) на vk.ru и");
+    println!("выполните — она вернёт готовый токен:");
+    println!();
+    println!("  fetch('https://login.vk.ru/?act=web_token', {{");
+    println!("    method: 'POST',");
+    println!("    headers: {{'Content-Type': 'application/x-www-form-urlencoded'}},");
+    println!("    body: 'version=1&app_id={}',", vk::VK_WEB_CLIENT_ID);
+    println!("    credentials: 'include'");
+    println!("  }}).then(r => r.json()).then(d => console.log(d.data.access_token))");
+    println!();
     if !browser_disabled() {
         if let Err(error) = open_browser(VK_LOGIN_PAGE) {
             println!("Не удалось открыть браузер: {error}");
             println!("Откройте страницу вручную: {VK_LOGIN_PAGE}");
         }
     }
-    println!();
 
-    let input = read_line("Вставьте \"p=...; remixsid=...\" или путь к cookies.txt: ")?;
-    vk_login_with_cookies(args, &input)
+    let input = read_line("Вставьте строку Cookie, путь к cookies.txt или access_token: ")?;
+    vk_login_with_cookies(args, &input, true)
 }
 
-fn vk_login_with_cookies(args: &Args, input: &str) -> Result<String> {
+fn vk_login_with_cookies(args: &Args, input: &str, save: bool) -> Result<String> {
     let input = input.trim();
+
+    // Разрешаем вставить готовый токен — например, из консоли браузера.
+    if !input.contains('=') {
+        if let Some(token) = vk::extract_access_token(input) {
+            return verify_vk_token(args, &token);
+        }
+    }
+
     let raw = if Path::new(input).is_file() {
         std::fs::read_to_string(input)
             .with_context(|| format!("Не удалось прочитать файл с куками {input}"))?
@@ -726,10 +749,17 @@ fn vk_login_with_cookies(args: &Args, input: &str) -> Result<String> {
     };
 
     let cookies = vk::extract_vk_cookies(&raw)?;
+    if save {
+        save_vk_cookies(&cookies);
+    }
     let web_token = vk::web_token(&cookies, args.timeout).map_err(|error| anyhow!("{error}"))?;
 
+    verify_vk_token(args, &web_token.access_token)
+}
+
+fn verify_vk_token(args: &Args, token: &str) -> Result<String> {
     let client = vk::VkClient::new(
-        web_token.access_token.clone(),
+        token.to_string(),
         args.timeout,
         u32::try_from(args.tries).unwrap_or(u32::MAX),
         args.retry_delay,
@@ -738,9 +768,7 @@ fn vk_login_with_cookies(args: &Args, input: &str) -> Result<String> {
         .current_user()
         .map_err(|error| anyhow!("Токен не подошёл: {error}"))?;
     println!("Токен действителен, аккаунт: {}", user.display_name());
-
-    save_vk_token(&web_token.access_token);
-    Ok(web_token.access_token)
+    Ok(token.to_string())
 }
 
 /// Читает одну строку из stdin; пустое приглашение отключает подсказку.
@@ -863,35 +891,32 @@ fn launch_browser(command: &mut Command) -> Result<()> {
     }
 }
 
-fn load_saved_vk_token() -> Option<String> {
-    let token = std::fs::read_to_string(vk_token_path()?).ok()?;
-    let token = token.trim().to_string();
-    (!token.is_empty()).then_some(token)
+fn load_saved_vk_cookies() -> Option<String> {
+    let cookies = std::fs::read_to_string(vk_cookies_path()?).ok()?;
+    let cookies = cookies.trim().to_string();
+    (!cookies.is_empty()).then_some(cookies)
 }
 
-fn save_vk_token(token: &str) {
-    let Some(path) = vk_token_path() else {
+fn save_vk_cookies(cookies: &str) {
+    let Some(path) = vk_cookies_path() else {
         return;
     };
     if let Some(parent) = path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
-    match write_secret(&path, token) {
-        Ok(()) => println!("VK-токен сохранён в {}", path.display()),
-        Err(error) => eprintln!(
-            "Не удалось сохранить VK-токен в {}: {error}",
-            path.display()
-        ),
+    match write_secret(&path, cookies) {
+        Ok(()) => println!("Куки VK сохранены в {}", path.display()),
+        Err(error) => eprintln!("Не удалось сохранить куки VK в {}: {error}", path.display()),
     }
 }
 
-fn vk_token_path() -> Option<PathBuf> {
-    if let Ok(path) = std::env::var("MUSIC_DOWNLOADER_VK_TOKEN_FILE") {
+fn vk_cookies_path() -> Option<PathBuf> {
+    if let Ok(path) = std::env::var("MUSIC_DOWNLOADER_VK_COOKIES_FILE") {
         if !path.is_empty() {
             return Some(PathBuf::from(path));
         }
     }
-    token_path().map(|path| path.with_file_name("vk_token"))
+    token_path().map(|path| path.with_file_name("vk_cookies"))
 }
 
 fn write_secret(path: &Path, contents: &str) -> std::io::Result<()> {

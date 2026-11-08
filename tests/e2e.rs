@@ -320,7 +320,7 @@ fn run_downloader(server: &MockServer, dir: &Path, args: &[&str]) -> std::proces
         .env("MUSIC_DOWNLOADER_API_BASE_URL", server.api_base())
         .env("MUSIC_DOWNLOADER_COVER_BASE_URL", "http://")
         .env("MUSIC_DOWNLOADER_TOKEN_FILE", dir.join("token"))
-        .env("MUSIC_DOWNLOADER_VK_TOKEN_FILE", dir.join("vk_token"))
+        .env("MUSIC_DOWNLOADER_VK_COOKIES_FILE", dir.join("vk_cookies"))
         .env("RUST_LOG", "debug")
         .arg("--token")
         .arg("test-token")
@@ -531,8 +531,8 @@ fn vk_track_download_end_to_end() {
             format!("{}/method", server.api_base()),
         )
         .env(
-            "MUSIC_DOWNLOADER_VK_TOKEN_FILE",
-            dir.path().join("vk_token"),
+            "MUSIC_DOWNLOADER_VK_COOKIES_FILE",
+            dir.path().join("vk_cookies"),
         )
         .arg("--vk-token")
         .arg("test-vk-token")
@@ -570,11 +570,11 @@ fn vk_track_download_end_to_end() {
 }
 
 #[test]
-fn vk_login_exchanges_cookies_and_saves_token() {
+fn vk_login_exchanges_cookies_and_saves_them() {
     let (cover, audio) = fixtures();
     let server = MockServer::start(cover, audio);
     let dir = tempfile::tempdir().unwrap();
-    let token_file = dir.path().join("vk_token");
+    let cookies_file = dir.path().join("vk_cookies");
 
     let mut child = Command::new(env!("CARGO_BIN_EXE_music-downloader"))
         .env(
@@ -582,7 +582,7 @@ fn vk_login_exchanges_cookies_and_saves_token() {
             format!("{}/method", server.api_base()),
         )
         .env("MUSIC_DOWNLOADER_VK_LOGIN_BASE_URL", server.api_base())
-        .env("MUSIC_DOWNLOADER_VK_TOKEN_FILE", &token_file)
+        .env("MUSIC_DOWNLOADER_VK_COOKIES_FILE", &cookies_file)
         .env("MUSIC_DOWNLOADER_NO_BROWSER", "1")
         .arg("--vk-login")
         .stdin(Stdio::piped())
@@ -608,16 +608,40 @@ fn vk_login_exchanges_cookies_and_saves_token() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("Тестовый Аккаунт"), "{stdout}");
     assert_eq!(
-        std::fs::read_to_string(&token_file).unwrap(),
-        "vk1.a.WEB_TOKEN"
+        std::fs::read_to_string(&cookies_file).unwrap(),
+        "p=abc; remixsid=def"
     );
 
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt as _;
-        let mode = std::fs::metadata(&token_file).unwrap().permissions().mode();
+        let mode = std::fs::metadata(&cookies_file)
+            .unwrap()
+            .permissions()
+            .mode();
         assert_eq!(mode & 0o777, 0o600);
     }
+
+    // Второй запуск не спрашивает куки: токен минтится из сохранённых кук.
+    let output = Command::new(env!("CARGO_BIN_EXE_music-downloader"))
+        .env(
+            "MUSIC_DOWNLOADER_VK_API_BASE_URL",
+            format!("{}/method", server.api_base()),
+        )
+        .env("MUSIC_DOWNLOADER_VK_LOGIN_BASE_URL", server.api_base())
+        .env("MUSIC_DOWNLOADER_VK_COOKIES_FILE", &cookies_file)
+        .arg("--dir")
+        .arg(dir.path())
+        .arg("https://vk.ru/audio-2001370911_36370911")
+        .output()
+        .expect("run music-downloader");
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(dir.path().join("VK Artist/VK Song.mp3").is_file());
 }
 
 #[test]
@@ -632,8 +656,8 @@ fn vk_hls_download_end_to_end() {
             format!("{}/method", server.api_base()),
         )
         .env(
-            "MUSIC_DOWNLOADER_VK_TOKEN_FILE",
-            dir.path().join("vk_token"),
+            "MUSIC_DOWNLOADER_VK_COOKIES_FILE",
+            dir.path().join("vk_cookies"),
         )
         .arg("--vk-token")
         .arg("test-vk-token")
