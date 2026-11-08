@@ -180,6 +180,7 @@ pub fn web_token(cookies: &str, timeout_secs: u64) -> ApiResult<WebToken> {
                         .post(&url)
                         .header("User-Agent", VK_WEB_USER_AGENT)
                         .header("Accept", "*/*")
+                        .header("X-Requested-With", "XMLHttpRequest")
                         .header("Origin", *origin)
                         .header("Referer", format!("{origin}/"))
                         .header("Cookie", cookie_header.as_str())
