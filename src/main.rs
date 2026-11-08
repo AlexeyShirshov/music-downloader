@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::io::{self, Write as _};
+use std::io::{self, IsTerminal as _, Write as _};
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode, Stdio};
 use std::sync::OnceLock;
@@ -563,6 +563,16 @@ fn resolve_vk_token(args: &Args) -> Result<String> {
     if let Some(token) = load_saved_vk_token() {
         println!("Используется сохранённый VK-токен");
         return Ok(token);
+    }
+
+    // Токена нет: если можем спросить пользователя, сразу запускаем тот же
+    // интерактивный вход, что и `--vk-login`, — иначе он просто увидел бы
+    // инструкцию, открыл браузер руками и запустил программу ещё раз.
+    // Без терминала (скрипт, CI, перенаправленный stdin) спрашивать некого,
+    // поэтому там остаётся сообщение с инструкцией.
+    if io::stdin().is_terminal() {
+        println!("Токен VK не найден — запускаю интерактивный вход (--vk-login).");
+        return vk_login(args);
     }
 
     let location = vk_token_path()
