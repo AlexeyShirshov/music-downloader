@@ -95,12 +95,12 @@ cargo build --release --target x86_64-pc-windows-msvc
 
 ### VK
 
-VK не отдаёт музыку без авторизации, а обычный веб-токен не имеет доступа к
-методам `audio.*`. Нужен токен приложения **Kate Mobile**.
+С сентября 2026 VK закрыл доступ сторонним приложениям: токены Kate Mobile и
+vkhost больше не выдаются, а выданные раньше перестали работать. Единственный
+рабочий способ — войти как **веб-клиент VK**: программа обменивает куки вашего
+браузера (`p` и `remixsid`) на токен веб-клиента и сохраняет его.
 
-Самый простой способ — `--vk-login`: программа откроет браузер, попросит
-подтвердить доступ и вставить скопированный адрес страницы (или сам токен),
-проверит токен через `users.get`, покажет аккаунт и сохранит его:
+Самый простой способ — `--vk-login`:
 
 ```bash
 music-downloader --vk-login
@@ -108,42 +108,48 @@ music-downloader --vk-login
 music-downloader --vk-login "https://vk.com/audio-2001370911_36370911"
 ```
 
-Браузер открывается автоматически; если это не удалось (нет `xdg-open`,
-работа по SSH, нестандартный терминал), программа напечатает ссылку — откройте
-её вручную. `MUSIC_DOWNLOADER_NO_BROWSER=1` отключает автоматическое открытие.
+1. Войдите в VK в браузере — программа откроет <https://vk.ru/>.
+2. Откройте DevTools (F12) → **Application** → **Storage** → **Cookies** →
+   `https://vk.ru`.
+3. Скопируйте значения кук `p` и `remixsid` и вставьте строкой
+   `p=...; remixsid=...`. Вместо строки можно указать путь к
+   экспортированному `cookies.txt` (Netscape) или JSON-экспорту расширения.
 
 Если токена ещё нет, вход запускается сам при первом скачивании трека VK:
 `--vk-login` не обязателен, флаг нужен, чтобы войти заранее или обновить токен.
 Без интерактивного терминала (скрипт, CI) программа не ждёт ввода, а печатает
 инструкцию и завершается с ошибкой.
 
-Вручную то же самое выглядит так:
-
-1. Откройте <https://vkhost.github.io>, выберите **Kate Mobile** и подтвердите
-   доступ.
-2. Скопируйте `access_token` из адресной строки.
-
-Токен даёт полный доступ к аккаунту — никому его не показывайте. Передать его
-можно так:
+Куки можно передать и без интерактива:
 
 ```bash
-music-downloader --vk-token "<Токен VK>" "https://vk.com/audio-2001370911_36370911"
-# или
-MUSIC_DOWNLOADER_VK_TOKEN="<Токен VK>" music-downloader "https://vk.ru/audio-2001370911_36370911"
-# токен из stdin, чтобы не оставлять его в истории shell
-echo "<Токен VK>" | music-downloader --vk-token - "https://vk.ru/audio-2001370911_36370911"
+music-downloader --vk-cookies "p=...; remixsid=..." \
+  "https://vk.ru/audio-2001370911_36370911"
+# файл cookies.txt (Netscape) или JSON-экспорт
+music-downloader --vk-cookies cookies.txt "https://vk.ru/audio-2001370911_36370911"
+# из stdin, чтобы не оставлять куки в истории shell
+echo "p=...; remixsid=..." | music-downloader --vk-cookies - \
+  "https://vk.ru/audio-2001370911_36370911"
 ```
 
-В `--vk-token` и `MUSIC_DOWNLOADER_VK_TOKEN` можно передать и весь URL
-`https://oauth.vk.com/blank.html#access_token=...` — программа сама выделит
-токен. Флаг `--vk-token` сохраняет токен в
-`~/.config/music-downloader/vk_token` (файл создаётся с правами `600`).
-Переменная `MUSIC_DOWNLOADER_VK_TOKEN_FILE` задаёт другой путь.
+Переменная `MUSIC_DOWNLOADER_VK_COOKIES` задаёт те же куки, что и
+`--vk-cookies`.
 
-Почему нельзя совсем как у Яндекса: у Яндекс.Музыки есть публичный OAuth-клиент
-и Device Flow, а VK закрыл `audio.*` для сторонних приложений и device flow не
-поддерживает. Поэтому автоматическим остаётся всё, кроме самого подтверждения
-доступа в браузере.
+Токен веб-клиента действует несколько недель и сохраняется в
+`~/.config/music-downloader/vk_token` (на Windows —
+`%APPDATA%\music-downloader\vk_token`, файл создаётся с правами `600`).
+Готовый токен можно передать через `--vk-token` или
+`MUSIC_DOWNLOADER_VK_TOKEN`; путь к файлу переопределяет
+`MUSIC_DOWNLOADER_VK_TOKEN_FILE`. Сами куки нигде не сохраняются.
+
+Скачивание: `audio.getById` теперь отдаёт HLS-плейлист. Программа сама
+собирает сегменты, расшифровывает AES-128-CBC (ключ и IV из плейлиста) и
+пишет mp3, если VK отдаёт mp3. Если поток окажется AAC в MPEG-TS, файл
+сохранится как `.ts` без тегов — для mp3 в этом случае нужен `ffmpeg`.
+
+Почему нельзя совсем как у Яндекса: у Яндекс.Музыки есть публичный
+OAuth-клиент и Device Flow, а VK закрыл сторонний доступ и device flow не
+поддерживает. Куки браузера — это единственный оставшийся вход.
 
 ## Использование
 
@@ -163,9 +169,8 @@ music-downloader --token "<Токен>" \
 # Плейлист
 music-downloader --token "<Токен>" --playlist-id "1/123"
 
-# Трек VK
-music-downloader --vk-token "<Токен VK>" \
-  "https://vk.ru/audio-2001370911_36370911"
+# Трек VK (при первом запуске вход по кукам браузера)
+music-downloader "https://vk.ru/audio-2001370911_36370911"
 ```
 
 ## Параметры
@@ -210,8 +215,9 @@ music-downloader --vk-token "<Токен VK>" \
 | `--path-pattern <шаблон>` | Шаблон пути (см. ниже). |
 | `--unsafe-path` | Не очищать путь от недопустимых символов. |
 | `--token <токен>` | Токен Яндекс.Музыки. |
-| `--vk-token <токен>` | Токен Kate Mobile для VK; `-` читает токен из stdin. |
-| `--vk-login` | Интерактивно получить и сохранить токен VK. |
+| `--vk-cookies <куки>` | Куки браузера VK (`p=...; remixsid=...`), файл `cookies.txt`/JSON или `-` для stdin. |
+| `--vk-token <токен>` | Готовый токен веб-клиента VK; `-` читает токен из stdin. |
+| `--vk-login` | Интерактивно обменять куки браузера на токен VK и сохранить его. |
 | `-h`, `--help` | Справка. |
 | `-V`, `--version` | Версия. |
 
@@ -280,12 +286,14 @@ music-downloader --token "<Токен>" \
 | Переменная | Назначение |
 | --- | --- |
 | `MUSIC_DOWNLOADER_TOKEN_FILE` | Путь к файлу токена Яндекс.Музыки. |
-| `MUSIC_DOWNLOADER_VK_TOKEN` | Токен VK (Kate Mobile). |
+| `MUSIC_DOWNLOADER_VK_COOKIES` | Куки браузера VK (`p=...; remixsid=...`) или путь к `cookies.txt`. |
+| `MUSIC_DOWNLOADER_VK_TOKEN` | Готовый токен веб-клиента VK. |
 | `MUSIC_DOWNLOADER_VK_TOKEN_FILE` | Путь к файлу токена VK. |
 | `MUSIC_DOWNLOADER_API_BASE_URL` | Базовый URL API Яндекс.Музыки (для отладки и тестов). |
 | `MUSIC_DOWNLOADER_COVER_BASE_URL` | Базовый URL обложек. |
 | `MUSIC_DOWNLOADER_VK_API_BASE_URL` | Базовый URL VK API. |
-| `MUSIC_DOWNLOADER_VK_API_VERSION` | Версия VK API. По умолчанию `5.95`. |
+| `MUSIC_DOWNLOADER_VK_API_VERSION` | Версия VK API. По умолчанию `5.282`. |
+| `MUSIC_DOWNLOADER_VK_LOGIN_BASE_URL` | Базовый URL обмена кук на токен (по умолчанию `https://login.vk.ru`). |
 | `RUST_LOG` | Уровень логирования, например `debug`. |
 
 ## Разработка

@@ -1,9 +1,14 @@
 //! Поддержка VK (vk.com / vk.ru): разбор ссылок и работа с Audio API.
 //!
-//! VK не отдаёт музыку неавторизованному клиенту, а обычные веб-токены не
-//! имеют доступа к методам `audio.*`. Поэтому используется токен приложения
-//! Kate Mobile вместе с его `User-Agent`.
+//! С сентября 2026 VK закрыл доступ сторонним приложениям: токены Kate Mobile
+//! и vkhost больше не выдаются и не работают. Остался веб-клиент самого VK,
+//! поэтому токен получается из кук браузера (`p` и `remixsid`) через
+//! `login.vk.ru/?act=web_token`, а запросы идут с `User-Agent` браузера.
+//!
+//! `audio.getById` теперь отдаёт HLS-плейлист; его сегменты собираются и
+//! расшифровываются в [`crate::hls`].
 
+use std::collections::HashMap;
 use std::sync::OnceLock;
 use std::time::Duration;
 
@@ -13,13 +18,18 @@ use serde::{Deserialize, Deserializer};
 use serde_json::Value;
 
 use crate::client::{ApiError, ApiResult};
+use crate::hls::{self, AudioKind};
 use crate::models::{Artist, Track};
 
-/// `User-Agent` Kate Mobile: обязателен при запросах к Audio API.
-pub const VK_USER_AGENT: &str =
-    "KateMobileAndroid/56 lite-460 (Android 4.4.2; SDK 19; x86; unknown Android SDK built for x86; en)";
-pub const DEFAULT_VK_API_BASE: &str = "https://api.vk.com/method";
-pub const DEFAULT_VK_API_VERSION: &str = "5.95";
+/// `User-Agent` веб-клиента VK: с ним выдаётся web-token и идут запросы.
+pub const VK_WEB_USER_AGENT: &str =
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:153.0) Gecko/20100101 Firefox/153.0";
+/// ID приложения веб-клиента (vk.ru) в VK ID.
+pub const VK_WEB_CLIENT_ID: &str = "6287487";
+/// Адрес обмена кук на web-token.
+pub const VK_WEB_LOGIN_BASE: &str = "https://login.vk.ru";
+pub const DEFAULT_VK_API_BASE: &str = "https://api.vk.ru/method";
+pub const DEFAULT_VK_API_VERSION: &str = "5.282";
 
 /// Максимальный размер тела ответа (аудиофайл).
 const BODY_LIMIT: u64 = 2 * 1024 * 1024 * 1024;
@@ -110,6 +120,184 @@ fn valid_token(token: &str) -> Option<String> {
         .chars()
         .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.'));
     allowed.then(|| token.to_string())
+}
+
+/// Токен веб-клиента VK, полученный по кукам браузера.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WebToken {
+    pub access_token: String,
+    /// Unix-время истечения (0, если VK его не прислал).
+    pub expires: i64,
+}
+
+/// Обменивает куки браузера (`p` и `remixsid`) на токен веб-клиента.
+pub fn web_token(cookies: &str, timeout_secs: u64) -> ApiResult<WebToken> {
+    let base = std::env::var("MUSIC_DOWNLOADER_VK_LOGIN_BASE_URL")
+        .ok()
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| VK_WEB_LOGIN_BASE.to_string());
+    let url = format!("{}/?act=web_token", base.trim_end_matches('/'));
+    let agent = http_agent(timeout_secs);
+
+    log::debug!("VK web_token {}", url);
+    let response = agent
+        .post(&url)
+        .header("User-Agent", VK_WEB_USER_AGENT)
+        .header("Origin", "https://vk.ru")
+        .header("Referer", "https://vk.ru/")
+        .header("Cookie", cookies)
+        .send_form([("version", "1"), ("app_id", VK_WEB_CLIENT_ID)])
+        .map_err(|error| ApiError::Network(format!("Не удалось получить токен VK: {error}")))?;
+
+    let status = response.status().as_u16();
+    let body = response
+        .into_body()
+        .with_config()
+        .limit(1024 * 1024)
+        .read_to_vec()
+        .map_err(|error| ApiError::Network(format!("Не удалось прочитать ответ VK: {error}")))?;
+    if !(200..300).contains(&status) {
+        return Err(ApiError::Fatal(format!("VK не выдал токен: HTTP {status}")));
+    }
+
+    let value: Value = serde_json::from_slice(&body)
+        .map_err(|error| ApiError::Fatal(format!("Некорректный ответ VK: {error}")))?;
+    let kind = value
+        .get("type")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    if kind != "ok" {
+        let info = value
+            .get("error_info")
+            .and_then(Value::as_str)
+            .unwrap_or("неизвестная ошибка");
+        return Err(ApiError::Fatal(format!(
+            "VK не выдал токен: {info}. Проверьте, что куки p и remixsid скопированы из вошедшего браузера"
+        )));
+    }
+
+    let data = value
+        .get("data")
+        .filter(|data| data.is_object())
+        .ok_or_else(|| ApiError::Fatal("VK вернул ответ без поля data".to_string()))?;
+    let access_token = data
+        .get("access_token")
+        .and_then(Value::as_str)
+        .filter(|token| !token.is_empty())
+        .ok_or_else(|| ApiError::Fatal("VK вернул пустой access_token".to_string()))?
+        .to_string();
+
+    Ok(WebToken {
+        access_token,
+        expires: data.get("expires").and_then(Value::as_i64).unwrap_or(0),
+    })
+}
+
+/// Достаёт куки `p` и `remixsid` из заголовка `Cookie`, файла cookies.txt
+/// (Netscape) или JSON-экспорта расширения.
+pub fn extract_vk_cookies(input: &str) -> Result<String> {
+    let text = input.trim();
+    if text.is_empty() {
+        bail!("Пустой ввод: нужны куки p и remixsid");
+    }
+
+    let mut cookies: HashMap<String, String> = HashMap::new();
+
+    if text.starts_with('[') || text.starts_with('{') {
+        collect_json_cookies(text, &mut cookies)?;
+    } else if text.contains('\t') {
+        collect_netscape_cookies(text, &mut cookies);
+    } else {
+        collect_header_cookies(text, &mut cookies);
+    }
+
+    let p = cookies
+        .get("p")
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "Не нашёл куку p. Скопируйте её из DevTools: Application → Cookies → https://vk.ru"
+            )
+        })?;
+    let remixsid = cookies
+        .get("remixsid")
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "Не нашёл куку remixsid. Скопируйте её из DevTools: Application → Cookies → https://vk.ru"
+            )
+        })?;
+
+    Ok(format!("p={p}; remixsid={remixsid}"))
+}
+
+fn collect_header_cookies(text: &str, cookies: &mut HashMap<String, String>) {
+    // Допускаем вставку целой строки `Cookie: p=...; remixsid=...`.
+    let text = text
+        .strip_prefix("Cookie:")
+        .or_else(|| text.strip_prefix("cookie:"))
+        .unwrap_or(text);
+    for item in text.split([';', '\n']) {
+        let Some((name, value)) = item.split_once('=') else {
+            continue;
+        };
+        let name = name.trim();
+        let value = value.trim().trim_matches('"');
+        if !name.is_empty() && !value.is_empty() {
+            cookies.insert(name.to_string(), value.to_string());
+        }
+    }
+}
+
+fn collect_netscape_cookies(text: &str, cookies: &mut HashMap<String, String>) {
+    for line in text.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let fields: Vec<&str> = line.split('\t').collect();
+        if fields.len() >= 7 {
+            cookies.insert(fields[5].trim().to_string(), fields[6].trim().to_string());
+        }
+    }
+}
+
+fn collect_json_cookies(text: &str, cookies: &mut HashMap<String, String>) -> Result<()> {
+    let value: Value = serde_json::from_str(text)
+        .map_err(|error| anyhow::anyhow!("Некорректный JSON с куками: {error}"))?;
+    match value {
+        Value::Array(items) => {
+            for item in items {
+                let Some(name) = item.get("name").and_then(Value::as_str) else {
+                    continue;
+                };
+                let Some(value) = item.get("value").and_then(Value::as_str) else {
+                    continue;
+                };
+                cookies.insert(name.to_string(), value.to_string());
+            }
+        }
+        Value::Object(map) => {
+            for (name, value) in map {
+                if let Some(value) = value.as_str() {
+                    cookies.insert(name, value.to_string());
+                }
+            }
+        }
+        _ => bail!("JSON с куками должен быть массивом или объектом"),
+    }
+    Ok(())
+}
+
+fn http_agent(timeout_secs: u64) -> ureq::Agent {
+    let timeout = Some(Duration::from_secs(timeout_secs));
+    ureq::Agent::config_builder()
+        .timeout_connect(timeout)
+        .timeout_recv_response(timeout)
+        .timeout_per_read(timeout)
+        .http_status_as_error(false)
+        .build()
+        .into()
 }
 
 /// Пользователь из ответа `users.get`.
@@ -224,14 +412,19 @@ impl VkAudio {
 
     /// Ссылка на mp3 (VK может отдать HLS-плейлист).
     pub fn download_url(&self) -> Result<String> {
-        let url = self
-            .url
+        let url = self.stream_url()?;
+        mp3_url(&url)
+    }
+
+    /// Ссылка, которую вернул VK: mp3 или `index.m3u8`.
+    pub fn stream_url(&self) -> Result<String> {
+        self.url
             .as_deref()
             .filter(|url| !url.is_empty())
+            .map(str::to_string)
             .ok_or_else(|| {
                 anyhow::anyhow!("VK не вернул ссылку на аудио: трек недоступен или удалён")
-            })?;
-        mp3_url(url)
+            })
     }
 }
 
@@ -273,14 +466,6 @@ pub struct VkClient {
 
 impl VkClient {
     pub fn new(token: String, timeout_secs: u64, tries: u32, retry_delay_secs: u64) -> Self {
-        let timeout = Some(Duration::from_secs(timeout_secs));
-        let config = ureq::Agent::config_builder()
-            .timeout_connect(timeout)
-            .timeout_recv_response(timeout)
-            .timeout_per_read(timeout)
-            .http_status_as_error(false)
-            .build();
-
         let api_base = std::env::var("MUSIC_DOWNLOADER_VK_API_BASE_URL")
             .ok()
             .filter(|value| !value.is_empty())
@@ -291,7 +476,7 @@ impl VkClient {
             .unwrap_or_else(|| DEFAULT_VK_API_VERSION.to_string());
 
         Self {
-            agent: config.into(),
+            agent: http_agent(timeout_secs),
             token,
             tries,
             retry_delay: Duration::from_secs(retry_delay_secs),
@@ -354,9 +539,10 @@ impl VkClient {
             let request = self
                 .agent
                 .get(&url)
-                .header("User-Agent", VK_USER_AGENT)
+                .header("User-Agent", VK_WEB_USER_AGENT)
                 .query("audios", id.api_id())
                 .query("access_token", self.token.as_str())
+                .query("client_id", VK_WEB_CLIENT_ID)
                 .query("v", self.api_version.as_str());
 
             log::debug!("VK audio.getById {}", id.api_id());
@@ -378,9 +564,10 @@ impl VkClient {
             let request = self
                 .agent
                 .get(&url)
-                .header("User-Agent", VK_USER_AGENT)
+                .header("User-Agent", VK_WEB_USER_AGENT)
                 .query("fields", "screen_name")
                 .query("access_token", self.token.as_str())
+                .query("client_id", VK_WEB_CLIENT_ID)
                 .query("v", self.api_version.as_str());
 
             log::debug!("VK users.get");
@@ -401,7 +588,24 @@ impl VkClient {
             match self
                 .agent
                 .get(url)
-                .header("User-Agent", VK_USER_AGENT)
+                .header("User-Agent", VK_WEB_USER_AGENT)
+                .call()
+            {
+                Ok(response) => self.read_body(response),
+                Err(error) => Err(ApiError::Network(format!("Ошибка загрузки {url}: {error}"))),
+            }
+        })?;
+        check_audio_body(body)
+    }
+
+    /// Скачивает трек по ссылке из `audio.getById`: если VK отдал HLS,
+    /// сегменты собираются и расшифровываются.
+    pub fn download_audio(&self, url: &str) -> ApiResult<Vec<u8>> {
+        let first = self.with_retries(|| {
+            match self
+                .agent
+                .get(url)
+                .header("User-Agent", VK_WEB_USER_AGENT)
                 .call()
             {
                 Ok(response) => self.read_body(response),
@@ -409,30 +613,61 @@ impl VkClient {
             }
         })?;
 
-        if body.starts_with(b"#EXTM3U") {
-            return Err(ApiError::Fatal(
-                "VK вернул HLS-плейлист вместо mp3. Попробуйте ещё раз или скачайте трек позже"
-                    .to_string(),
-            ));
+        if !first.starts_with(b"#EXTM3U") {
+            return check_audio_body(first);
         }
 
-        if body.is_empty() {
-            return Err(ApiError::Fatal("VK вернул пустой файл".to_string()));
-        }
+        let fetch = |address: &str, range: Option<(u64, u64)>| {
+            let body = self.with_retries(|| {
+                let mut request = self
+                    .agent
+                    .get(address)
+                    .header("User-Agent", VK_WEB_USER_AGENT);
+                if let Some((start, end)) = range {
+                    request = request.header("Range", format!("bytes={start}-{end}"));
+                }
+                match request.call() {
+                    Ok(response) => self.read_body(response),
+                    Err(error) => Err(ApiError::Network(format!(
+                        "Ошибка загрузки {address}: {error}"
+                    ))),
+                }
+            })?;
+            Ok(body)
+        };
 
-        let head = &body[..body.len().min(256)];
-        if head.starts_with(b"<!DOCTYPE")
-            || head.starts_with(b"<html")
-            || head.starts_with(b"<?xml")
-        {
-            return Err(ApiError::Fatal(
-                "VK вернул HTML-страницу вместо аудиофайла: ссылка устарела или запрос заблокирован"
-                    .to_string(),
-            ));
-        }
-
-        Ok(body)
+        let body = hls::download(url, &fetch)
+            .map_err(|error| ApiError::Fatal(format!("Не удалось собрать HLS-поток: {error}")))?;
+        log::debug!(
+            "HLS собран: {} байт, {:?}",
+            body.len(),
+            AudioKind::sniff(&body)
+        );
+        check_audio_body(body)
     }
+}
+
+/// Проверяет, что VK вернул именно аудио.
+fn check_audio_body(body: Vec<u8>) -> ApiResult<Vec<u8>> {
+    if body.is_empty() {
+        return Err(ApiError::Fatal("VK вернул пустой файл".to_string()));
+    }
+
+    if body.starts_with(b"#EXTM3U") {
+        return Err(ApiError::Fatal(
+            "VK вернул HLS-плейлист вместо аудиофайла".to_string(),
+        ));
+    }
+
+    let head = &body[..body.len().min(256)];
+    if head.starts_with(b"<!DOCTYPE") || head.starts_with(b"<html") || head.starts_with(b"<?xml") {
+        return Err(ApiError::Fatal(
+            "VK вернул HTML-страницу вместо аудиофайла: ссылка устарела или запрос заблокирован"
+                .to_string(),
+        ));
+    }
+
+    Ok(body)
 }
 
 fn parse_audio_response(body: &[u8], requested: AudioId) -> ApiResult<VkAudio> {
@@ -499,11 +734,12 @@ fn api_error(value: &Value) -> Option<ApiError> {
 fn explain_error(code: i64, message: String) -> String {
     match code {
         5 => format!(
-            "{message}. Токен недействителен или не имеет доступа к аудио: получите токен Kate Mobile заново (https://vkhost.github.io)"
+            "{message}. Токен недействителен или не имеет доступа к аудио: получите токен заново \
+             через --vk-cookies (вход на https://vk.ru)"
         ),
-        15 | 100 | 201 => format!(
-            "{message}. Нет доступа к этой аудиозаписи: проверьте ссылку и права аккаунта"
-        ),
+        15 | 100 | 201 => {
+            format!("{message}. Нет доступа к этой аудиозаписи: проверьте ссылку и права аккаунта")
+        }
         _ => message,
     }
 }

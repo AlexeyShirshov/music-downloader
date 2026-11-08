@@ -1,4 +1,4 @@
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::path::Path;
 use std::process::{Command, Stdio};
@@ -51,6 +51,26 @@ fn handle(mut stream: TcpStream, address: SocketAddr, cover: &[u8], audio: &[u8]
     }
     let full_path = request_line.split_whitespace().nth(1).unwrap_or("/");
     let path = full_path.split('?').next().unwrap_or("/");
+
+    // Дочитываем заголовки и тело: иначе закрытие сокета с непрочитанным
+    // телом POST обрывает соединение и клиент не успевает получить ответ.
+    let mut content_length = 0usize;
+    loop {
+        let mut line = String::new();
+        if reader.read_line(&mut line).is_err() || line.is_empty() {
+            break;
+        }
+        if line == "\r\n" || line == "\n" {
+            break;
+        }
+        if let Some(value) = line.to_ascii_lowercase().strip_prefix("content-length:") {
+            content_length = value.trim().parse().unwrap_or(0);
+        }
+    }
+    if content_length > 0 {
+        let mut body = vec![0u8; content_length];
+        let _ = reader.read_exact(&mut body);
+    }
 
     let track = json!({
         "id": "1",
@@ -167,22 +187,50 @@ fn handle(mut stream: TcpStream, address: SocketAddr, cover: &[u8], audio: &[u8]
             .into_bytes(),
         ),
         "/file" => (200, "audio/mpeg", audio.to_vec()),
-        "/method/audio.getById" => (
+        "/method/audio.getById" => {
+            let hls = full_path.contains("36370912");
+            let url = if hls {
+                format!("http://{address}/hls/index.m3u8")
+            } else {
+                format!("http://{address}/vkfile")
+            };
+            let id = if hls { 36370912 } else { 36370911 };
+            (
+                200,
+                "application/json",
+                json!({
+                    "response": [{
+                        "id": id,
+                        "owner_id": -2001370911,
+                        "artist": "VK Artist",
+                        "title": "VK Song",
+                        "duration": 215,
+                        "url": url
+                    }]
+                })
+                .to_string()
+                .into_bytes(),
+            )
+        }
+        "/" => (
             200,
             "application/json",
             json!({
-                "response": [{
-                    "id": 36370911,
-                    "owner_id": -2001370911,
-                    "artist": "VK Artist",
-                    "title": "VK Song",
-                    "duration": 215,
-                    "url": format!("http://{address}/vkfile")
-                }]
+                "type": "ok",
+                "data": {
+                    "access_token": "vk1.a.WEB_TOKEN",
+                    "expires": 0
+                }
             })
             .to_string()
             .into_bytes(),
         ),
+        "/hls/index.m3u8" => (
+            200,
+            "application/vnd.apple.mpegurl",
+            b"#EXTM3U\n#EXT-X-MEDIA-SEQUENCE:0\n#EXTINF:10,\nseg0.mp3\n#EXT-X-ENDLIST\n".to_vec(),
+        ),
+        "/hls/seg0.mp3" => (200, "audio/mpeg", audio.to_vec()),
         "/method/users.get" => (
             200,
             "application/json",
@@ -522,7 +570,7 @@ fn vk_track_download_end_to_end() {
 }
 
 #[test]
-fn vk_login_accepts_pasted_url_and_saves_token() {
+fn vk_login_exchanges_cookies_and_saves_token() {
     let (cover, audio) = fixtures();
     let server = MockServer::start(cover, audio);
     let dir = tempfile::tempdir().unwrap();
@@ -533,6 +581,7 @@ fn vk_login_accepts_pasted_url_and_saves_token() {
             "MUSIC_DOWNLOADER_VK_API_BASE_URL",
             format!("{}/method", server.api_base()),
         )
+        .env("MUSIC_DOWNLOADER_VK_LOGIN_BASE_URL", server.api_base())
         .env("MUSIC_DOWNLOADER_VK_TOKEN_FILE", &token_file)
         .env("MUSIC_DOWNLOADER_NO_BROWSER", "1")
         .arg("--vk-login")
@@ -546,7 +595,7 @@ fn vk_login_accepts_pasted_url_and_saves_token() {
         .stdin
         .take()
         .unwrap()
-        .write_all(b"https://oauth.vk.com/blank.html#access_token=vk1.a.TEST_TOKEN&expires_in=0\n")
+        .write_all(b"p=abc; remixsid=def\n")
         .unwrap();
 
     let output = child.wait_with_output().unwrap();
@@ -560,7 +609,7 @@ fn vk_login_accepts_pasted_url_and_saves_token() {
     assert!(stdout.contains("Тестовый Аккаунт"), "{stdout}");
     assert_eq!(
         std::fs::read_to_string(&token_file).unwrap(),
-        "vk1.a.TEST_TOKEN"
+        "vk1.a.WEB_TOKEN"
     );
 
     #[cfg(unix)]
@@ -569,4 +618,49 @@ fn vk_login_accepts_pasted_url_and_saves_token() {
         let mode = std::fs::metadata(&token_file).unwrap().permissions().mode();
         assert_eq!(mode & 0o777, 0o600);
     }
+}
+
+#[test]
+fn vk_hls_download_end_to_end() {
+    let (cover, audio) = fixtures();
+    let server = MockServer::start(cover.clone(), audio.clone());
+    let dir = tempfile::tempdir().unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_music-downloader"))
+        .env(
+            "MUSIC_DOWNLOADER_VK_API_BASE_URL",
+            format!("{}/method", server.api_base()),
+        )
+        .env(
+            "MUSIC_DOWNLOADER_VK_TOKEN_FILE",
+            dir.path().join("vk_token"),
+        )
+        .arg("--vk-token")
+        .arg("test-vk-token")
+        .arg("--dir")
+        .arg(dir.path())
+        .arg("https://vk.ru/audio-2001370911_36370912")
+        .output()
+        .expect("run music-downloader");
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let file = dir.path().join("VK Artist/VK Song.mp3");
+    assert!(file.is_file(), "downloaded HLS track exists");
+    assert!(std::fs::read(&file).unwrap().len() > audio.len());
+
+    let tag = lofty::read_from_path(&file)
+        .unwrap()
+        .primary_tag()
+        .unwrap()
+        .clone();
+    assert_eq!(
+        tag.get_string(lofty::tag::ItemKey::TrackTitle),
+        Some("VK Song")
+    );
+    let _ = cover;
 }

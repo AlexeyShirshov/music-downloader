@@ -1,5 +1,5 @@
 use music_downloader::vk::{
-    extract_access_token, mp3_url, parse_audio_link, AudioId, VkAudio, VkUser,
+    extract_access_token, extract_vk_cookies, mp3_url, parse_audio_link, AudioId, VkAudio, VkUser,
 };
 
 #[test]
@@ -136,4 +136,38 @@ fn formats_account_names() {
         ..VkUser::default()
     };
     assert_eq!(user.display_name(), "id42");
+}
+
+#[test]
+fn reads_cookies_from_header() {
+    let cookies = extract_vk_cookies("p=abc123; remixsid=def456").unwrap();
+    assert_eq!(cookies, "p=abc123; remixsid=def456");
+
+    let cookies = extract_vk_cookies("Cookie: p=\"abc\"; YandexBrowser=1; remixsid=def").unwrap();
+    assert_eq!(cookies, "p=abc; remixsid=def");
+}
+
+#[test]
+fn reads_cookies_from_netscape_file() {
+    let text = "# Netscape HTTP Cookie File\n\
+        .vk.ru\tTRUE\t/\tTRUE\t1800000000\tp\tabc\n\
+        .vk.ru\tTRUE\t/\tTRUE\t1800000000\tremixsid\tdef\n";
+    assert_eq!(extract_vk_cookies(text).unwrap(), "p=abc; remixsid=def");
+}
+
+#[test]
+fn reads_cookies_from_json_export() {
+    let text =
+        r#"[{"name":"p","value":"abc","domain":".vk.ru"},{"name":"remixsid","value":"def"}]"#;
+    assert_eq!(extract_vk_cookies(text).unwrap(), "p=abc; remixsid=def");
+}
+
+#[test]
+fn reports_missing_cookies() {
+    let error = extract_vk_cookies("p=abc").unwrap_err().to_string();
+    assert!(error.contains("remixsid"), "{error}");
+    let error = extract_vk_cookies("foo=bar; remixsid=def")
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("p"), "{error}");
 }

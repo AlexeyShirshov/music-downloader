@@ -13,6 +13,7 @@ use sha2::{Digest, Sha256};
 
 use music_downloader::api::{self, Container, CustomDownloadInfo};
 use music_downloader::client::Client;
+use music_downloader::hls;
 use music_downloader::mime::guess_mime_type;
 use music_downloader::models::{Album, Track};
 use music_downloader::path_pattern::{
@@ -260,16 +261,25 @@ struct Args {
     #[arg(
         long,
         help_heading = "Авторизация",
+        value_name = "Куки VK",
+        help = "Куки браузера VK (p=...; remixsid=...) или путь к cookies.txt. Значение `-` читает куки из stdin"
+    )]
+    vk_cookies: Option<String>,
+
+    #[arg(
+        long,
+        help_heading = "Авторизация",
         value_name = "Токен VK",
-        help = "Токен Kate Mobile для ссылок vk.com/vk.ru. Если не указан, читается из MUSIC_DOWNLOADER_VK_TOKEN или сохранённого файла. Значение `-` читает токен из stdin"
+        conflicts_with = "vk_cookies",
+        help = "Готовый токен веб-клиента VK. Обычно не нужен: проще передать куки через --vk-cookies. Значение `-` читает токен из stdin"
     )]
     vk_token: Option<String>,
 
     #[arg(
         long,
         help_heading = "Авторизация",
-        conflicts_with = "vk_token",
-        help = "Интерактивно получить токен VK: открыть браузер, принять вставленный URL или токен, проверить и сохранить"
+        conflicts_with_all = ["vk_cookies", "vk_token"],
+        help = "Интерактивно получить токен VK по кукам браузера: открыть vk.ru, принять вставленные куки, проверить и сохранить"
     )]
     vk_login: bool,
 }
@@ -474,7 +484,7 @@ fn run_vk(args: Args, audio_id: AudioId) -> Result<()> {
     let audio = client
         .get_by_id(audio_id)
         .map_err(|error| anyhow!("{error}"))?;
-    let download_url = audio.download_url()?;
+    let stream_url = audio.stream_url()?;
     let track = audio.to_track(audio_id);
 
     let pattern = args
@@ -489,8 +499,10 @@ fn run_vk(args: Args, audio_id: AudioId) -> Result<()> {
         return Ok(());
     }
 
+    let (data, format) = download_vk_audio(&client, &stream_url)?;
+
     let mut target = base_path.as_os_str().to_os_string();
-    target.push(".mp3");
+    target.push(format.extension());
     let target_path = PathBuf::from(target);
 
     if let Some(parent) = target_path
@@ -503,35 +515,118 @@ fn run_vk(args: Args, audio_id: AudioId) -> Result<()> {
         }
     }
 
-    println!("[1/1] [MP3] Загружается {}", target_path.display());
-    let data = client
-        .download(&download_url)
-        .map_err(|error| anyhow!("{error}"))?;
+    println!(
+        "[1/1] [{}] Загружается {}",
+        format.label(),
+        target_path.display()
+    );
 
     let source_url = vk::track_url(audio_id);
     let compatibility_level = i64::from(args.compatibility_level);
-    write_via_temporary_file(
-        &data,
-        &target_path,
-        Some(&|temporary_path: &Path| {
-            set_tags_with_url(
-                temporary_path,
-                &track,
-                Container::Mp3,
-                None,
-                None,
-                compatibility_level,
-                &source_url,
-            )
-        }),
-    )?;
+    let container = match format {
+        VkFormat::Mp3 => Some(Container::Mp3),
+        VkFormat::M4a => Some(Container::Mp4),
+        VkFormat::Ts => None,
+    };
+
+    match container {
+        Some(container) => {
+            write_via_temporary_file(
+                &data,
+                &target_path,
+                Some(&|temporary_path: &Path| {
+                    set_tags_with_url(
+                        temporary_path,
+                        &track,
+                        container,
+                        None,
+                        None,
+                        compatibility_level,
+                        &source_url,
+                    )
+                }),
+            )?;
+        }
+        None => {
+            write_via_temporary_file(&data, &target_path, None)?;
+            println!("VK отдал AAC в MPEG-TS — файл сохранён без тегов. Для mp3 нужен ffmpeg.");
+        }
+    }
 
     Ok(())
+}
+
+/// Формат, в котором VK отдал трек.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum VkFormat {
+    Mp3,
+    M4a,
+    Ts,
+}
+
+impl VkFormat {
+    fn extension(self) -> &'static str {
+        match self {
+            Self::Mp3 => ".mp3",
+            Self::M4a => ".m4a",
+            Self::Ts => ".ts",
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Mp3 => "MP3",
+            Self::M4a => "AAC",
+            Self::Ts => "AAC (TS)",
+        }
+    }
+}
+
+/// Скачивает трек: сначала пробует прямой mp3 (VK хранит его рядом с HLS),
+/// иначе собирает HLS-плейлист.
+fn download_vk_audio(client: &vk::VkClient, stream_url: &str) -> Result<(Vec<u8>, VkFormat)> {
+    let mp3 = vk::mp3_url(stream_url).unwrap_or_else(|_| stream_url.to_string());
+    if let Ok(data) = client.download(&mp3) {
+        let format = vk_format(&data);
+        return Ok((data, format));
+    }
+
+    let data = client
+        .download_audio(stream_url)
+        .map_err(|error| anyhow!("{error}"))?;
+    let format = vk_format(&data);
+    Ok((data, format))
+}
+
+fn vk_format(data: &[u8]) -> VkFormat {
+    match hls::AudioKind::sniff(data) {
+        hls::AudioKind::Mp3 => VkFormat::Mp3,
+        hls::AudioKind::Mp4 => VkFormat::M4a,
+        hls::AudioKind::Ts => VkFormat::Ts,
+        hls::AudioKind::Unknown => {
+            log::debug!("Неизвестный формат VK, сохраняю как mp3");
+            VkFormat::Mp3
+        }
+    }
 }
 
 fn resolve_vk_token(args: &Args) -> Result<String> {
     if args.vk_login {
         return vk_login(args);
+    }
+
+    if let Some(raw) = args
+        .vk_cookies
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        let raw = if raw == "-" {
+            read_line("")?
+        } else {
+            raw.to_string()
+        };
+        return vk_login_with_cookies(args, &raw);
     }
 
     if let Some(raw) = args
@@ -560,6 +655,13 @@ fn resolve_vk_token(args: &Args) -> Result<String> {
         }
     }
 
+    if let Ok(value) = std::env::var("MUSIC_DOWNLOADER_VK_COOKIES") {
+        let value = value.trim();
+        if !value.is_empty() {
+            return vk_login_with_cookies(args, value);
+        }
+    }
+
     if let Some(token) = load_saved_vk_token() {
         println!("Используется сохранённый VK-токен");
         return Ok(token);
@@ -571,7 +673,7 @@ fn resolve_vk_token(args: &Args) -> Result<String> {
     // Без терминала (скрипт, CI, перенаправленный stdin) спрашивать некого,
     // поэтому там остаётся сообщение с инструкцией.
     if io::stdin().is_terminal() {
-        println!("Токен VK не найден — запускаю интерактивный вход (--vk-login).");
+        println!("Токен VK не найден — запускаю вход по кукам браузера (--vk-login).");
         return vk_login(args);
     }
 
@@ -579,43 +681,55 @@ fn resolve_vk_token(args: &Args) -> Result<String> {
         .map(|path| path.display().to_string())
         .unwrap_or_else(|| "~/.config/music-downloader/vk_token".to_string());
     bail!(
-        "Для VK нужен токен Kate Mobile. Запустите с --vk-login, чтобы получить и сохранить его \
-         интерактивно, либо получите токен на https://vkhost.github.io (Kate Mobile) и передайте \
-         через --vk-token, переменную окружения MUSIC_DOWNLOADER_VK_TOKEN или сохраните в {location}"
+        "Для VK нужен доступ к аккаунту. Запустите с --vk-login (или --vk-cookies), чтобы \
+         обменять куки браузера на токен и сохранить его в {location}. Готовый токен можно \
+         передать через --vk-token или MUSIC_DOWNLOADER_VK_TOKEN"
     )
 }
 
-/// Ссылка, где можно получить токен Kate Mobile.
-const VK_TOKEN_URL: &str = "https://vkhost.github.io/";
+/// Страница, где пользователь входит в VK и откуда забирает куки.
+const VK_LOGIN_PAGE: &str = "https://vk.ru/";
 
-/// Полуавтоматическое получение токена VK.
+/// Интерактивный вход в VK по кукам браузера.
 ///
-/// Полностью автоматический OAuth, как у Яндекс.Музыки, для VK невозможен:
-/// методов `audio.*` нет у сторонних приложений, а device flow VK не
-/// поддерживает. Поэтому пользователь проходит авторизацию в браузере сам, а
-/// программа забирает результат, проверяет токен и сохраняет его.
+/// VK закрыл доступ сторонним приложениям (Kate Mobile, vkhost) в сентябре
+/// 2026, поэтому OAuth-токен больше не получить. Зато токен веб-клиента
+/// выдаётся по кукам `p` и `remixsid` вошедшего браузера — их и просим.
 fn vk_login(args: &Args) -> Result<String> {
-    println!("VK не выдаёт доступ к музыке сторонним приложениям, поэтому вход нельзя");
-    println!("сделать полностью автоматическим, как у Яндекс.Музыки.");
+    println!(
+        "VK закрыл доступ сторонним приложениям, поэтому токен Kate Mobile больше не работает."
+    );
+    println!("Вход теперь идёт через куки вашего браузера:");
     println!();
-    println!("1. Откройте {VK_TOKEN_URL} и выберите Kate Mobile.");
-    println!("2. Разрешите доступ и скопируйте адрес страницы целиком");
-    println!("   (https://oauth.vk.com/blank.html#access_token=...) или сам access_token.");
+    println!("1. Войдите в VK: {VK_LOGIN_PAGE}");
+    println!("2. Откройте DevTools (F12) → Application → Storage → Cookies → {VK_LOGIN_PAGE}");
+    println!("3. Скопируйте значения кук p и remixsid или экспортируйте cookies.txt.");
     if !browser_disabled() {
-        if let Err(error) = open_browser(VK_TOKEN_URL) {
+        if let Err(error) = open_browser(VK_LOGIN_PAGE) {
             println!("Не удалось открыть браузер: {error}");
-            println!("Откройте ссылку вручную: {VK_TOKEN_URL}");
+            println!("Откройте страницу вручную: {VK_LOGIN_PAGE}");
         }
     }
     println!();
 
-    let input = read_line("Вставьте URL или access_token: ")?;
-    let token = vk::extract_access_token(&input).ok_or_else(|| {
-        anyhow!("Это не похоже на VK-токен: ожидается access_token или URL с access_token=")
-    })?;
+    let input = read_line("Вставьте \"p=...; remixsid=...\" или путь к cookies.txt: ")?;
+    vk_login_with_cookies(args, &input)
+}
+
+fn vk_login_with_cookies(args: &Args, input: &str) -> Result<String> {
+    let input = input.trim();
+    let raw = if Path::new(input).is_file() {
+        std::fs::read_to_string(input)
+            .with_context(|| format!("Не удалось прочитать файл с куками {input}"))?
+    } else {
+        input.to_string()
+    };
+
+    let cookies = vk::extract_vk_cookies(&raw)?;
+    let web_token = vk::web_token(&cookies, args.timeout).map_err(|error| anyhow!("{error}"))?;
 
     let client = vk::VkClient::new(
-        token.clone(),
+        web_token.access_token.clone(),
         args.timeout,
         u32::try_from(args.tries).unwrap_or(u32::MAX),
         args.retry_delay,
@@ -625,8 +739,8 @@ fn vk_login(args: &Args) -> Result<String> {
         .map_err(|error| anyhow!("Токен не подошёл: {error}"))?;
     println!("Токен действителен, аккаунт: {}", user.display_name());
 
-    save_vk_token(&token);
-    Ok(token)
+    save_vk_token(&web_token.access_token);
+    Ok(web_token.access_token)
 }
 
 /// Читает одну строку из stdin; пустое приглашение отключает подсказку.
