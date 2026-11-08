@@ -144,8 +144,12 @@ fn reads_cookies_from_header() {
     let cookies = extract_vk_cookies("p=abc123; remixsid=def456").unwrap();
     assert_eq!(cookies, "p=abc123; remixsid=def456");
 
-    let cookies = extract_vk_cookies("Cookie: p=\"abc\"; YandexBrowser=1; remixsid=def").unwrap();
-    assert_eq!(cookies, "p=abc; YandexBrowser=1; remixsid=def");
+    // Заголовок передаётся как есть: порядок и одноимённые куки важны.
+    let header = "Cookie: remixlang=0; remixsid=def; YandexBrowser=1; remixsid=ghi";
+    assert_eq!(
+        extract_vk_cookies(header).unwrap(),
+        "remixlang=0; remixsid=def; YandexBrowser=1; remixsid=ghi"
+    );
 }
 
 #[test]

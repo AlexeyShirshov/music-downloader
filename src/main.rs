@@ -749,6 +749,13 @@ fn vk_login_with_cookies(args: &Args, input: &str, save: bool) -> Result<String>
     };
 
     let cookies = vk::extract_vk_cookies(&raw)?;
+    let names = cookies
+        .split(';')
+        .filter_map(|item| item.split_once('='))
+        .map(|(name, _)| name.trim())
+        .collect::<Vec<_>>()
+        .join(", ");
+    println!("Куки получены: {names} ({} символов)", cookies.len());
     if save {
         save_vk_cookies(&cookies);
     }

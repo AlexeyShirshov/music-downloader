@@ -144,80 +144,111 @@ pub fn web_token(cookies: &str, timeout_secs: u64) -> ApiResult<WebToken> {
     let agent = http_agent(timeout_secs);
     let mut last_error = None;
 
-    for (base, origin) in hosts {
-        let base = if base.is_empty() {
-            override_base.as_deref().unwrap_or(VK_WEB_LOGIN_BASE)
-        } else {
-            base
-        };
-        let url = format!("{}/?act=web_token", base.trim_end_matches('/'));
+    // Сначала весь заголовок, потом только куки сессии: лишняя/устаревшая
+    // кука иногда мешает VK подтвердить сессию.
+    let mut variants = vec![cookies.to_string()];
+    if let Some(session) = session_cookies(cookies) {
+        if session != cookies {
+            variants.push(session);
+        }
+    }
 
-        // POST — основной вариант; GET с параметрами в строке VK тоже
-        // принимает на части сессий.
-        for use_post in [true, false] {
-            log::debug!(
-                "VK web_token {} ({})",
-                url,
-                if use_post { "POST" } else { "GET" }
-            );
-            let get_url = format!("{url}&version=1&app_id={VK_WEB_CLIENT_ID}");
-            let response = if use_post {
-                agent
-                    .post(&url)
-                    .header("User-Agent", VK_WEB_USER_AGENT)
-                    .header("Accept", "*/*")
-                    .header("Origin", *origin)
-                    .header("Referer", format!("{origin}/"))
-                    .header("Cookie", cookies)
-                    .send_form([("version", "1"), ("app_id", VK_WEB_CLIENT_ID)])
+    for (variant_index, cookie_header) in variants.iter().enumerate() {
+        let use_get = variant_index == 0;
+        for (base, origin) in hosts {
+            let base = if base.is_empty() {
+                override_base.as_deref().unwrap_or(VK_WEB_LOGIN_BASE)
             } else {
-                agent
-                    .get(&get_url)
-                    .header("User-Agent", VK_WEB_USER_AGENT)
-                    .header("Accept", "*/*")
-                    .header("Origin", *origin)
-                    .header("Referer", format!("{origin}/"))
-                    .header("Cookie", cookies)
-                    .call()
+                base
             };
-            let response = match response {
-                Ok(response) => response,
-                Err(error) => {
-                    last_error = Some(ApiError::Network(format!(
-                        "Не удалось получить токен VK: {error}"
-                    )));
+            let url = format!("{}/?act=web_token", base.trim_end_matches('/'));
+
+            // POST — основной вариант; GET с параметрами в строке VK тоже
+            // принимает на части сессий.
+            for use_post in [true, false] {
+                if !use_post && !use_get {
                     continue;
                 }
-            };
+                log::debug!(
+                    "VK web_token {} ({})",
+                    url,
+                    if use_post { "POST" } else { "GET" }
+                );
+                let get_url = format!("{url}&version=1&app_id={VK_WEB_CLIENT_ID}");
+                let response = if use_post {
+                    agent
+                        .post(&url)
+                        .header("User-Agent", VK_WEB_USER_AGENT)
+                        .header("Accept", "*/*")
+                        .header("Origin", *origin)
+                        .header("Referer", format!("{origin}/"))
+                        .header("Cookie", cookie_header.as_str())
+                        .send_form([("version", "1"), ("app_id", VK_WEB_CLIENT_ID)])
+                } else {
+                    agent
+                        .get(&get_url)
+                        .header("User-Agent", VK_WEB_USER_AGENT)
+                        .header("Accept", "*/*")
+                        .header("Origin", *origin)
+                        .header("Referer", format!("{origin}/"))
+                        .header("Cookie", cookie_header.as_str())
+                        .call()
+                };
+                let response = match response {
+                    Ok(response) => response,
+                    Err(error) => {
+                        last_error = Some(ApiError::Network(format!(
+                            "Не удалось получить токен VK: {error}"
+                        )));
+                        continue;
+                    }
+                };
 
-            let status = response.status().as_u16();
-            let body = match response
-                .into_body()
-                .with_config()
-                .limit(1024 * 1024)
-                .read_to_vec()
-            {
-                Ok(body) => body,
-                Err(error) => {
-                    last_error = Some(ApiError::Network(format!(
-                        "Не удалось прочитать ответ VK: {error}"
-                    )));
+                let status = response.status().as_u16();
+                let body = match response
+                    .into_body()
+                    .with_config()
+                    .limit(1024 * 1024)
+                    .read_to_vec()
+                {
+                    Ok(body) => body,
+                    Err(error) => {
+                        last_error = Some(ApiError::Network(format!(
+                            "Не удалось прочитать ответ VK: {error}"
+                        )));
+                        continue;
+                    }
+                };
+                if !(200..300).contains(&status) {
+                    last_error = Some(ApiError::Fatal(format!("VK не выдал токен: HTTP {status}")));
                     continue;
                 }
-            };
-            if !(200..300).contains(&status) {
-                last_error = Some(ApiError::Fatal(format!("VK не выдал токен: HTTP {status}")));
-                continue;
-            }
 
-            match parse_web_token(&body) {
-                Ok(token) => return Ok(token),
-                Err(error) => last_error = Some(error),
+                match parse_web_token(&body) {
+                    Ok(token) => return Ok(token),
+                    Err(error) => last_error = Some(error),
+                }
             }
         }
     }
 
     Err(last_error.unwrap_or_else(|| ApiError::Fatal("VK не выдал токен".to_string())))
+}
+
+/// Оставляет в заголовке только куки сессии VK.
+fn session_cookies(header: &str) -> Option<String> {
+    let mut cookies = Vec::new();
+    for item in header.split(';') {
+        let Some((name, value)) = item.split_once('=') else {
+            continue;
+        };
+        let name = name.trim();
+        let value = value.trim();
+        if is_session_cookie(name) && !value.is_empty() {
+            cookies.push(format!("{name}={value}"));
+        }
+    }
+    (!cookies.is_empty()).then(|| cookies.join("; "))
 }
 
 /// Разбирает ответ `login.vk.ru/?act=web_token`.
@@ -236,7 +267,8 @@ pub fn parse_web_token(body: &[u8]) -> ApiResult<WebToken> {
             .unwrap_or("неизвестная ошибка");
         return Err(ApiError::Fatal(format!(
             "VK не выдал токен: {info}. Куки могли истечь или быть скопированы не из того \
-             браузера; тогда получите токен в консоли браузера (--vk-login покажет как)"
+             браузера. Если в консоли браузера токен выдаётся, а здесь нет — проверьте VPN/прокси: \
+             VK привязывает сессию к IP"
         )));
     }
 
@@ -266,14 +298,33 @@ pub fn extract_vk_cookies(input: &str) -> Result<String> {
         bail!("Пустой ввод: нужны куки сессии VK");
     }
 
-    let mut cookies: Vec<(String, String)> = Vec::new();
+    // Готовый заголовок отправляем как есть: в нём бывают одноимённые куки
+    // для .vk.ru и .vk.com, и пересборка может оставить не ту.
+    if !text.starts_with('[') && !text.starts_with('{') && !text.contains('\t') {
+        let header = text
+            .strip_prefix("Cookie:")
+            .or_else(|| text.strip_prefix("cookie:"))
+            .unwrap_or(text)
+            .trim()
+            .to_string();
+        if !header
+            .split(';')
+            .filter_map(|item| item.split_once('='))
+            .any(|(name, value)| is_session_cookie(name.trim()) && !value.trim().is_empty())
+        {
+            bail!(
+                "Не нашёл куку сессии VK (remixsid). Скопируйте строку Cookie целиком из DevTools: \
+                 Network → любой запрос к vk.ru → Request Headers → Cookie"
+            );
+        }
+        return Ok(header);
+    }
 
+    let mut cookies: Vec<(String, String)> = Vec::new();
     if text.starts_with('[') || text.starts_with('{') {
         collect_json_cookies(text, &mut cookies)?;
-    } else if text.contains('\t') {
-        collect_netscape_cookies(text, &mut cookies);
     } else {
-        collect_header_cookies(text, &mut cookies);
+        collect_netscape_cookies(text, &mut cookies);
     }
 
     if !cookies
@@ -316,27 +367,6 @@ fn push_cookie(cookies: &mut Vec<(String, String)>, name: &str, value: &str) {
         slot.1 = value.to_string();
     } else {
         cookies.push((name.to_string(), value.to_string()));
-    }
-}
-
-fn collect_header_cookies(text: &str, cookies: &mut Vec<(String, String)>) {
-    // Допускаем вставку целой строки `Cookie: ...` и даже `Set-Cookie`.
-    let text = text
-        .strip_prefix("Cookie:")
-        .or_else(|| text.strip_prefix("cookie:"))
-        .unwrap_or(text);
-    for item in text.split([';', '\n']) {
-        let Some((name, value)) = item.split_once('=') else {
-            continue;
-        };
-        // Атрибуты Set-Cookie — не куки.
-        if matches!(
-            name.trim().to_ascii_lowercase().as_str(),
-            "path" | "domain" | "expires" | "max-age" | "samesite" | "priority"
-        ) {
-            continue;
-        }
-        push_cookie(cookies, name, value);
     }
 }
 
