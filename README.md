@@ -280,11 +280,53 @@ cargo test
 
 Workflow прогоняет тесты, обновляет версию в `Cargo.toml` и `Cargo.lock`,
 коммитит `chore(release): vX.Y.Z`, ставит тег, собирает бинарники для Linux,
-Windows и macOS, добавляет `SHA256SUMS` и создаёт GitHub Release со
-сгенерированными заметками.
+Windows и macOS, добавляет `SHA256SUMS` и создаёт GitHub Release.
+
+Описание релиза собирается из шаблона `.github/release-notes.md`: таблица
+платформ, инструкции по установке и проверке подлинности. Необязательное поле
+**«Что нового»** в ручном запуске workflow добавляет свой текст в начало
+описания. Артефакты подписываются через GitHub Artifact Attestations, проверить
+подпись можно так:
+
+```bash
+gh attestation verify music-downloader-linux-x86_64 \
+  --repo AlexeyShirshov/music-downloader
+```
 
 Текущая версия — `1.0.0`; для первого релиза достаточно запустить workflow с
 `none`.
+
+## Безопасность
+
+Каждый push в `main` и каждый pull request прогоняют
+[`.github/workflows/security.yml`](.github/workflows/security.yml):
+
+| Проверка | Что делает |
+| --- | --- |
+| **RustSec advisories** (`cargo audit`) | Сверяет `Cargo.lock` с базой уязвимостей RustSec. |
+| **cargo-deny** | Уязвимости, yanked-версии, недопустимые лицензии, wildcard-зависимости и сторонние источники пакетов (`deny.toml`). |
+| **gitleaks** | Ищет случайно закоммиченные токены, ключи и пароли во всей истории git. |
+| **zizmor** | Статический анализ самих workflow: инъекции в `run`, слишком широкие `permissions`, незакреплённые action'ы, утечка креденшелов в артефакты. |
+| **CodeQL** | Семантический анализ кода на Rust и самих workflow. |
+| **Dependency review** | В PR не даёт добавить зависимость с известной уязвимостью (уровень `moderate` и выше). |
+| **OpenSSF Scorecard** | Оценка гигиены репозитория с публикацией результата; запускается раз в неделю и на push в `main`. |
+
+Дополнительно:
+
+- все сторонние action'ы в workflow закреплены на конкретный commit SHA, а не
+  на плавающий тег;
+- раз в неделю Dependabot обновляет cargo- и GitHub Actions-зависимости
+  (с недельной задержкой после публикации версии);
+- в `Cargo.toml` включён `unsafe_code = "forbid"` — небезопасный код не
+  соберётся.
+
+Те же проверки можно запустить локально:
+
+```bash
+cargo install cargo-audit cargo-deny
+cargo audit
+cargo deny check
+```
 
 ## Переход со старого названия
 

@@ -1,0 +1,25 @@
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    # Не поднимать версии, опубликованные меньше недели назад: даём время
+    # заметить вредоносный или сломанный релиз.
+    cooldown:
+      default-days: 7
+    groups:
+      cargo:
+        patterns: ["*"]
+
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    cooldown:
+      default-days: 7
+    groups:
+      github-actions:
+        patterns: ["*"]

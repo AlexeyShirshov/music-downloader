@@ -40,6 +40,10 @@ lofty = "0.25"
 serde_json = "1"
 tempfile = "3"
 
+[lints.rust]
+# В проекте нет и не должно появляться небезопасного кода.
+unsafe_code = "forbid"
+
 [profile.release]
 opt-level = 3
 lto = true

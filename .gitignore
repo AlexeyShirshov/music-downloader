@@ -2,6 +2,9 @@
 /target/
 /dist/
 
+# Generated release description (scripts/render-release-notes.py)
+/release-notes.md
+
 # Local environment
 .env
 
