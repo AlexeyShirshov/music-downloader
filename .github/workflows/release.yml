@@ -13,11 +13,6 @@ on:
           - minor
           - major
           - none
-      highlights:
-        description: "Что нового (markdown, попадёт в описание релиза)"
-        required: false
-        default: ""
-        type: string
 
 permissions: {}
 
@@ -199,6 +194,9 @@ jobs:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           ref: ${{ needs.version.outputs.tag }}
+          # Нужна вся история: раздел «Что нового» строится по коммитам
+          # между предыдущим тегом и новым.
+          fetch-depth: 0
           persist-credentials: false
 
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
@@ -214,12 +212,18 @@ jobs:
         with:
           subject-checksums: dist/SHA256SUMS
 
+      - name: Collect changes
+        env:
+          TAG: ${{ needs.version.outputs.tag }}
+          PREVIOUS: ${{ needs.version.outputs.previous }}
+        run: bash scripts/release-changelog.sh "$PREVIOUS" "$TAG" > changelog.md
+
       - name: Render release notes
         env:
           TAG: ${{ needs.version.outputs.tag }}
           PREVIOUS: ${{ needs.version.outputs.previous }}
-          HIGHLIGHTS: ${{ inputs.highlights }}
           REPOSITORY: ${{ github.repository }}
+          CHANGES_FILE: changelog.md
         run: python3 scripts/render-release-notes.py
 
       - name: Create or update release

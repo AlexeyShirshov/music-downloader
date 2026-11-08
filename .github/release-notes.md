@@ -1,6 +1,6 @@
 ## music-downloader {{TAG}}
 
-{{HIGHLIGHTS}}
+{{CHANGES}}
 
 ### Скачать
 

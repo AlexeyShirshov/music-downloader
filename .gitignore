@@ -4,6 +4,7 @@
 
 # Generated release description (scripts/render-release-notes.py)
 /release-notes.md
+/changelog.md
 
 # Local environment
 .env

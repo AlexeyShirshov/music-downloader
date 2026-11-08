@@ -2,10 +2,10 @@
 """Собирает описание GitHub Release из шаблона .github/release-notes.md.
 
 Переменные окружения:
-    TAG         тег релиза (обязательно), например v1.0.1
-    REPOSITORY  owner/repo (обязательно), например AlexeyShirshov/music-downloader
-    PREVIOUS    предыдущий тег; если задан, добавляется ссылка на diff
-    HIGHLIGHTS  произвольный markdown с описанием изменений (может быть пустым)
+    TAG           тег релиза (обязательно), например v1.0.1
+    REPOSITORY    owner/repo (обязательно), например AlexeyShirshov/music-downloader
+    PREVIOUS      предыдущий тег; если задан, добавляется ссылка на diff
+    CHANGES_FILE  файл с готовым разделом «Что нового» (по умолчанию changelog.md)
 
 Результат пишется в release-notes.md в текущем каталоге.
 """
@@ -22,11 +22,11 @@ TEMPLATE = ROOT / ".github" / "release-notes.md"
 OUTPUT = pathlib.Path("release-notes.md")
 
 
-def render(tag: str, repository: str, previous: str, highlights: str) -> str:
+def render(tag: str, repository: str, previous: str, changes: str) -> str:
     body = TEMPLATE.read_text(encoding="utf-8")
     body = body.replace("{{TAG}}", tag)
     body = body.replace("{{REPOSITORY}}", repository)
-    body = body.replace("{{HIGHLIGHTS}}", highlights.strip())
+    body = body.replace("{{CHANGES}}", changes.strip())
 
     if previous and previous != tag:
         changelog = (
@@ -53,11 +53,14 @@ def main() -> int:
         print(f"Нет шаблона {TEMPLATE}", file=sys.stderr)
         return 1
 
+    changes_file = pathlib.Path(os.environ.get("CHANGES_FILE", "changelog.md"))
+    changes = changes_file.read_text(encoding="utf-8") if changes_file.is_file() else ""
+
     body = render(
         tag=tag,
         repository=repository,
         previous=os.environ.get("PREVIOUS", "").strip(),
-        highlights=os.environ.get("HIGHLIGHTS", ""),
+        changes=changes,
     )
     OUTPUT.write_text(body, encoding="utf-8")
     print(f"Описание релиза: {OUTPUT} ({len(body)} символов)")
