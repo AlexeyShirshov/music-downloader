@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::io::{self, IsTerminal as _, Write as _};
+use std::io::{self, Write as _};
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode, Stdio};
 use std::sync::OnceLock;
@@ -591,8 +591,11 @@ fn vk_login(args: &Args) -> Result<String> {
     println!("1. Откройте {VK_TOKEN_URL} и выберите Kate Mobile.");
     println!("2. Разрешите доступ и скопируйте адрес страницы целиком");
     println!("   (https://oauth.vk.com/blank.html#access_token=...) или сам access_token.");
-    if io::stdout().is_terminal() && !open_browser(VK_TOKEN_URL) {
-        println!("Браузер открыть не удалось — откройте ссылку вручную.");
+    if !browser_disabled() {
+        if let Err(error) = open_browser(VK_TOKEN_URL) {
+            println!("Не удалось открыть браузер: {error}");
+            println!("Откройте ссылку вручную: {VK_TOKEN_URL}");
+        }
     }
     println!();
 
@@ -637,36 +640,103 @@ fn read_line(prompt: &str) -> Result<String> {
     Ok(line.to_string())
 }
 
-/// Открывает URL в браузере по умолчанию. Возвращает `false`, если запустить
-/// браузер не удалось (тогда ссылку нужно открыть вручную).
-fn open_browser(url: &str) -> bool {
-    #[cfg(target_os = "windows")]
-    let mut command = {
-        let mut command = Command::new("cmd");
-        command.args(["/C", "start", "", url]);
-        command
-    };
+/// Переменная окружения, отключающая автоматическое открытие браузера
+/// (нужна тестам и неинтерактивным запускам).
+const NO_BROWSER_ENV: &str = "MUSIC_DOWNLOADER_NO_BROWSER";
 
-    #[cfg(target_os = "macos")]
-    let mut command = {
-        let mut command = Command::new("open");
-        command.arg(url);
-        command
-    };
+/// Сколько ждать завершения команды открытия, чтобы отличить «браузер уже
+/// запускается» от «команда упала» (нет `xdg-open`, битая ассоциация протокола).
+const BROWSER_PROBE: Duration = Duration::from_millis(800);
 
-    #[cfg(all(unix, not(target_os = "macos")))]
-    let mut command = {
-        let mut command = Command::new("xdg-open");
-        command.arg(url);
-        command
-    };
+fn browser_disabled() -> bool {
+    match std::env::var(NO_BROWSER_ENV) {
+        Ok(value) => !value.is_empty() && value != "0",
+        Err(_) => false,
+    }
+}
 
+/// Открывает URL в браузере по умолчанию.
+///
+/// Способы перебираются по очереди, пока какой-нибудь не запустится: на
+/// Windows это `cmd /C start` (а затем `rundll32`), на macOS — `open`, на
+/// остальных Unix-системах — `xdg-open`, `gio open`, `wslview` и
+/// `sensible-browser`. Ошибка возвращается, только если не сработал ни один
+/// способ, — тогда ссылку нужно открыть вручную.
+fn open_browser(url: &str) -> Result<()> {
+    let candidates = browser_commands(url);
+    let mut errors = Vec::new();
+    for mut command in candidates {
+        let program = command.get_program().to_string_lossy().into_owned();
+        match launch_browser(&mut command) {
+            Ok(()) => return Ok(()),
+            Err(error) => errors.push(format!("{program}: {error}")),
+        }
+    }
+
+    bail!("ни один способ не сработал ({})", errors.join("; "))
+}
+
+#[cfg(target_os = "windows")]
+fn browser_commands(url: &str) -> Vec<Command> {
+    vec![
+        // `start` — встроенная команда cmd. Пустой первый аргумент — заголовок
+        // окна: без него `start` принимает URL за заголовок и ничего не открывает.
+        command("cmd", &["/C", "start", "", url]),
+        command("rundll32", &["url.dll,FileProtocolHandler", url]),
+    ]
+}
+
+#[cfg(target_os = "macos")]
+fn browser_commands(url: &str) -> Vec<Command> {
+    vec![command("open", &[url])]
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+fn browser_commands(url: &str) -> Vec<Command> {
+    vec![
+        command("xdg-open", &[url]),
+        command("gio", &["open", url]),
+        // WSL: без wslview ссылка откроется в браузере Windows.
+        command("wslview", &[url]),
+        command("sensible-browser", &[url]),
+    ]
+}
+
+#[cfg(not(any(
+    target_os = "windows",
+    target_os = "macos",
+    all(unix, not(target_os = "macos"))
+)))]
+fn browser_commands(_url: &str) -> Vec<Command> {
+    Vec::new()
+}
+
+fn command(program: &str, arguments: &[&str]) -> Command {
+    let mut command = Command::new(program);
+    command.args(arguments);
     command
+}
+
+/// Запускает команду открытия и коротко ждёт результат: если процесс успел
+/// завершиться с ошибкой, пробуем следующий способ. Долго работающий процесс
+/// (сам браузер) считаем успехом и не ждём его.
+fn launch_browser(command: &mut Command) -> Result<()> {
+    let mut child = command
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
-        .is_ok()
+        .context("не удалось запустить команду")?;
+
+    let deadline = Instant::now() + BROWSER_PROBE;
+    loop {
+        match child.try_wait().context("не удалось дождаться команды")? {
+            Some(status) if status.success() => return Ok(()),
+            Some(status) => bail!("команда завершилась с ошибкой: {status}"),
+            None if Instant::now() >= deadline => return Ok(()),
+            None => std::thread::sleep(Duration::from_millis(25)),
+        }
+    }
 }
 
 fn load_saved_vk_token() -> Option<String> {

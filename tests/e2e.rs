@@ -534,6 +534,7 @@ fn vk_login_accepts_pasted_url_and_saves_token() {
             format!("{}/method", server.api_base()),
         )
         .env("MUSIC_DOWNLOADER_VK_TOKEN_FILE", &token_file)
+        .env("MUSIC_DOWNLOADER_NO_BROWSER", "1")
         .arg("--vk-login")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
